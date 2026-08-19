@@ -45,6 +45,7 @@
 	import ColoredActionsToggle from '$lib/components/ColoredActionsToggle.svelte';
 	import { themeStore } from '$lib/stores/theme';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import { startRegistration } from '@simplewebauthn/browser';
 
 	interface Profile {
 		id: number;
@@ -95,6 +96,94 @@
 	let apiTokens = $state<ApiToken[]>([]);
 	let showApiTokenModal = $state(false);
 	let tokensLoading = $state(false);
+
+	interface Passkey {
+		id: number;
+		name: string | null;
+		deviceType: string;
+		backedUp: boolean;
+		createdAt: string;
+	}
+	let passkeys = $state<Passkey[]>([]);
+	let passkeysLoading = $state(false);
+	let passkeyActionLoading = $state(false);
+	let passkeyName = $state('');
+	let passkeyError = $state('');
+	let passkeyNames = $state<Record<number, string>>({});
+
+	async function fetchPasskeys() {
+		passkeysLoading = true;
+		try {
+			const response = await fetch('/api/profile/passkeys');
+			if (response.ok) {
+				const data = await response.json();
+				passkeys = data.passkeys || [];
+				passkeyNames = Object.fromEntries(passkeys.map((passkey) => [passkey.id, passkey.name || '']));
+			}
+		} finally {
+			passkeysLoading = false;
+		}
+	}
+
+	async function addPasskey() {
+		passkeyActionLoading = true;
+		passkeyError = '';
+		try {
+			const optionsResponse = await fetch('/api/auth/passkeys/register/options', { method: 'POST' });
+			const optionsData = await optionsResponse.json();
+			if (!optionsResponse.ok) throw new Error(optionsData.error || 'Passkey registration is unavailable');
+
+			const registrationResponse = await startRegistration({ optionsJSON: optionsData.options });
+			const verifyResponse = await fetch('/api/auth/passkeys/register/verify', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					ceremonyId: optionsData.ceremonyId,
+					response: registrationResponse,
+					name: passkeyName
+				})
+			});
+			const verifyData = await verifyResponse.json();
+			if (!verifyResponse.ok) throw new Error(verifyData.error || 'Passkey registration failed');
+			passkeyName = '';
+			await fetchPasskeys();
+			showSuccessMessage('Passkey added successfully');
+		} catch (e) {
+			passkeyError = e instanceof Error && e.name !== 'NotAllowedError'
+				? e.message
+				: 'Passkey registration was cancelled or timed out';
+		} finally {
+			passkeyActionLoading = false;
+		}
+	}
+
+	async function renamePasskey(passkeyId: number) {
+		passkeyError = '';
+		const response = await fetch(`/api/profile/passkeys/${passkeyId}`, {
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ name: passkeyNames[passkeyId] || '' })
+		});
+		if (response.ok) {
+			await fetchPasskeys();
+			showSuccessMessage('Passkey renamed');
+		} else {
+			const data = await response.json();
+			passkeyError = data.error || 'Failed to rename Passkey';
+		}
+	}
+
+	async function deletePasskey(passkeyId: number) {
+		passkeyError = '';
+		const response = await fetch(`/api/profile/passkeys/${passkeyId}`, { method: 'DELETE' });
+		if (response.ok) {
+			await fetchPasskeys();
+			showSuccessMessage('Passkey removed');
+		} else {
+			const data = await response.json();
+			passkeyError = data.error || 'Failed to remove Passkey';
+		}
+	}
 
 	async function fetchApiTokens() {
 		tokensLoading = true;
@@ -345,6 +434,7 @@
 				profileFetched = true;
 				fetchProfile();
 				fetchApiTokens();
+				fetchPasskeys();
 			}
 		}
 	});
@@ -641,6 +731,67 @@
 							<Alert.Description>{mfaError}</Alert.Description>
 						</Alert.Root>
 					{/if}
+
+					<div class="p-3 border rounded-lg space-y-3">
+						<div class="flex items-center gap-3">
+							<KeyRound class="w-5 h-5 text-muted-foreground" />
+							<div>
+								<p class="font-medium">Passkeys</p>
+								<p class="text-sm text-muted-foreground">Use a device-bound or synced Passkey to sign in</p>
+							</div>
+						</div>
+
+						<div class="flex flex-col sm:flex-row gap-2">
+							<Input bind:value={passkeyName} maxlength={64} placeholder="Name (optional), e.g. Token2 key" />
+							<Button onclick={addPasskey} disabled={passkeyActionLoading} class="shrink-0">
+								{#if passkeyActionLoading}
+									<RefreshCw class="w-4 h-4 mr-1 animate-spin" />
+								{:else}
+									<Plus class="w-4 h-4 mr-1" />
+								{/if}
+								Add passkey
+							</Button>
+						</div>
+
+						{#if passkeysLoading}
+							<p class="text-sm text-muted-foreground">Loading Passkeys...</p>
+						{:else if passkeys.length === 0}
+							<p class="text-sm text-muted-foreground">No Passkeys registered.</p>
+						{:else}
+							<div class="space-y-2">
+								{#each passkeys as passkey (passkey.id)}
+									<div class="flex flex-col gap-2 rounded-md bg-muted/40 p-2">
+										<div class="flex items-center gap-2">
+											<Input bind:value={passkeyNames[passkey.id]} maxlength={64} aria-label="Passkey name" />
+											<Button variant="outline" size="sm" onclick={() => renamePasskey(passkey.id)}>Save</Button>
+											<ConfirmPopover
+												action="remove"
+												itemName={passkeyNames[passkey.id] || 'this Passkey'}
+												itemType="Passkey"
+												confirmText="Remove"
+												onConfirm={() => deletePasskey(passkey.id)}
+											>
+												<Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" aria-label="Remove Passkey">
+													<Trash2 class="w-4 h-4" />
+												</Button>
+											</ConfirmPopover>
+										</div>
+										<p class="text-xs text-muted-foreground">
+											{passkey.deviceType === 'multiDevice' ? 'Synced Passkey' : 'Single-device Passkey'}
+											{passkey.backedUp ? ' · backed up' : ''} · added {formatDateTime(passkey.createdAt)}
+										</p>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						{#if passkeyError}
+							<Alert.Root variant="destructive">
+								<TriangleAlert class="h-4 w-4" />
+								<Alert.Description>{passkeyError}</Alert.Description>
+							</Alert.Root>
+						{/if}
+					</div>
 				</Card.Content>
 			</Card.Root>
 
