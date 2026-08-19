@@ -21,7 +21,10 @@ function uniqueConstraint(error: unknown): 'name' | 'credential' | null {
 	if (typeof error !== 'object' || error === null) return null;
 	const candidate = error as { code?: string; constraint?: string; message?: string };
 	const detail = `${candidate.constraint || ''} ${candidate.message || ''}`;
-	if (!candidate.code && !/unique constraint/i.test(detail)) return null;
+	const isUnique = candidate.code === '23505'
+		|| candidate.code === 'SQLITE_CONSTRAINT_UNIQUE'
+		|| /unique constraint/i.test(detail);
+	if (!isUnique) return null;
 	return /passkey_credentials_user_name_unique/i.test(detail) ? 'name' : 'credential';
 }
 
