@@ -12,6 +12,7 @@ import {
 	real,
 	primaryKey,
 	unique,
+	uniqueIndex,
 	index
 } from 'drizzle-orm/sqlite-core';
 import { sql } from 'drizzle-orm';
@@ -201,7 +202,8 @@ export const passkeyCredentials = sqliteTable('passkey_credentials', {
 	name: text('name'),
 	createdAt: text('created_at').notNull().default(sql`CURRENT_TIMESTAMP`)
 }, (table) => ({
-	userIdIdx: index('passkey_credentials_user_id_idx').on(table.userId)
+	userIdIdx: index('passkey_credentials_user_id_idx').on(table.userId),
+	userNameUnique: uniqueIndex('passkey_credentials_user_name_unique').on(table.userId, sql`lower(${table.name})`)
 }));
 
 export const sessions = sqliteTable('sessions', {

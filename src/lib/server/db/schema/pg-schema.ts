@@ -15,6 +15,7 @@ import {
 	bigint,
 	timestamp,
 	unique,
+	uniqueIndex,
 	index
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -204,7 +205,8 @@ export const passkeyCredentials = pgTable('passkey_credentials', {
 	name: text('name'),
 	createdAt: timestamp('created_at', { mode: 'string' }).notNull().defaultNow()
 }, (table) => ({
-	userIdIdx: index('passkey_credentials_user_id_idx').on(table.userId)
+	userIdIdx: index('passkey_credentials_user_id_idx').on(table.userId),
+	userNameUnique: uniqueIndex('passkey_credentials_user_name_unique').on(table.userId, sql`lower(${table.name})`)
 }));
 
 export const sessions = pgTable('sessions', {

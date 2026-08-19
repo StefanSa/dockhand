@@ -4,6 +4,7 @@ import { verifyRegistrationResponse, type RegistrationResponseJSON } from '@simp
 import {
 	createPasskeyCredential,
 	getPasskeyCredentialByCredentialId,
+	getPasskeyCredentialByNameForUser,
 	getPasskeyCredentialsForUser
 } from '$lib/server/db';
 import { isAuthEnabled, SESSION_COOKIE, validateSession } from '$lib/server/auth';
@@ -16,10 +17,12 @@ import {
 
 const NO_STORE = { 'Cache-Control': 'no-store' };
 
-function isUniqueConstraintError(error: unknown): boolean {
-	if (typeof error !== 'object' || error === null) return false;
-	const candidate = error as { code?: string; message?: string };
-	return candidate.code === '23505' || /unique constraint/i.test(candidate.message || '');
+function uniqueConstraint(error: unknown): 'name' | 'credential' | null {
+	if (typeof error !== 'object' || error === null) return null;
+	const candidate = error as { code?: string; constraint?: string; message?: string };
+	const detail = `${candidate.constraint || ''} ${candidate.message || ''}`;
+	if (!candidate.code && !/unique constraint/i.test(detail)) return null;
+	return /passkey_credentials_user_name_unique/i.test(detail) ? 'name' : 'credential';
 }
 
 export const POST: RequestHandler = async ({ request, cookies }) => {
@@ -37,7 +40,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 	const sessionId = cookies.get(SESSION_COOKIE);
 	if (!user || !sessionId) return json({ error: 'Not authenticated' }, { status: 401, headers: NO_STORE });
 
-	let body: { ceremonyId?: string; response?: RegistrationResponseJSON; name?: string };
+	let body: { ceremonyId?: string; response?: RegistrationResponseJSON };
 	try {
 		body = await request.json();
 	} catch {
@@ -46,10 +49,12 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 
 	if (!body.ceremonyId || !body.response) return json({ error: 'Invalid request' }, { status: 400, headers: NO_STORE });
 	const ceremony = webAuthnChallenges.consume(body.ceremonyId, 'registration', { userId: user.id, sessionId });
-	if (!ceremony?.userHandle) return json({ error: 'Passkey ceremony expired or is invalid' }, { status: 400, headers: NO_STORE });
-
-	const name = typeof body.name === 'string' ? body.name.trim() : '';
-	if (name.length > 64) return json({ error: 'Passkey name must be 64 characters or fewer' }, { status: 400, headers: NO_STORE });
+	if (!ceremony?.userHandle || !ceremony.passkeyName) {
+		return json({ error: 'Passkey ceremony expired or is invalid' }, { status: 400, headers: NO_STORE });
+	}
+	if (await getPasskeyCredentialByNameForUser(user.id, ceremony.passkeyName)) {
+		return json({ error: 'A Passkey with this name already exists' }, { status: 409, headers: NO_STORE });
+	}
 
 	try {
 		const verification = await verifyRegistrationResponse({
@@ -82,7 +87,7 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			deviceType: credentialDeviceType,
 			backedUp: credentialBackedUp,
 			transports: credential.transports ? JSON.stringify(credential.transports) : null,
-			name: name || null
+			name: ceremony.passkeyName
 		});
 
 		return json({
@@ -96,7 +101,11 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			}
 		}, { headers: NO_STORE });
 	} catch (error) {
-		if (isUniqueConstraintError(error)) {
+		const constraint = uniqueConstraint(error);
+		if (constraint === 'name') {
+			return json({ error: 'A Passkey with this name already exists' }, { status: 409, headers: NO_STORE });
+		}
+		if (constraint === 'credential') {
 			return json({ error: 'This Passkey is already registered' }, { status: 409, headers: NO_STORE });
 		}
 		return json({ error: 'Passkey registration could not be verified' }, { status: 400, headers: NO_STORE });

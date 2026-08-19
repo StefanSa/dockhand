@@ -14,6 +14,7 @@ export interface WebAuthnChallenge {
 	userId?: number;
 	sessionId?: string;
 	userHandle?: string;
+	passkeyName?: string;
 }
 
 export class WebAuthnChallengeStore {
@@ -28,7 +29,7 @@ export class WebAuthnChallengeStore {
 	issue(
 		challenge: string,
 		ceremony: WebAuthnCeremony,
-		binding: Pick<WebAuthnChallenge, 'userId' | 'sessionId' | 'userHandle'> = {}
+		binding: Pick<WebAuthnChallenge, 'userId' | 'sessionId' | 'userHandle' | 'passkeyName'> = {}
 	): WebAuthnChallenge {
 		this.removeExpired();
 		if (this.challenges.size >= this.maxPending) {

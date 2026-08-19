@@ -1,9 +1,6 @@
 import { json } from '@sveltejs/kit';
 import type { Cookies, RequestHandler } from '@sveltejs/kit';
-import {
-	deletePasskeyCredentialForUser,
-	updatePasskeyCredentialNameForUser
-} from '$lib/server/db';
+import { deletePasskeyCredentialForUser } from '$lib/server/db';
 import { isAuthEnabled, validateSession } from '$lib/server/auth';
 import type { AuthenticatedUser } from '$lib/server/auth';
 import { getWebAuthnConfig, hasExactWebAuthnOrigin } from '$lib/server/webauthn';
@@ -24,27 +21,6 @@ async function authorize(request: Request, cookies: Cookies): Promise<PasskeyAut
 	if (!user) return { error: json({ error: 'Not authenticated' }, { status: 401, headers: NO_STORE }) };
 	return { user };
 }
-
-export const PATCH: RequestHandler = async ({ request, cookies, params }) => {
-	const auth = await authorize(request, cookies);
-	if (auth.error) return auth.error;
-	const id = Number(params.id);
-	if (!Number.isSafeInteger(id) || id < 1) return json({ error: 'Invalid Passkey ID' }, { status: 400, headers: NO_STORE });
-
-	let name: unknown;
-	try {
-		({ name } = await request.json());
-	} catch {
-		return json({ error: 'Invalid request' }, { status: 400, headers: NO_STORE });
-	}
-	if (typeof name !== 'string' || name.trim().length > 64) {
-		return json({ error: 'Passkey name must be 64 characters or fewer' }, { status: 400, headers: NO_STORE });
-	}
-
-	const updated = await updatePasskeyCredentialNameForUser(id, auth.user.id, name.trim() || null);
-	if (!updated) return json({ error: 'Passkey not found' }, { status: 404, headers: NO_STORE });
-	return json({ success: true }, { headers: NO_STORE });
-};
 
 export const DELETE: RequestHandler = async ({ request, cookies, params }) => {
 	const auth = await authorize(request, cookies);

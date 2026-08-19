@@ -25,7 +25,11 @@ test('register → logout → usernameless Passkey login while preserving recove
 	async function registerWithVirtualAuthenticator(name: string) {
 		return page.evaluate(async ({ name, moduleUrl }) => {
 			const { startRegistration } = await import(moduleUrl);
-			const optionsResponse = await fetch('/api/auth/passkeys/register/options', { method: 'POST' });
+			const optionsResponse = await fetch('/api/auth/passkeys/register/options', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name })
+			});
 			const optionsData = await optionsResponse.json();
 			if (!optionsResponse.ok) return { status: optionsResponse.status, body: optionsData };
 			const response = await startRegistration({ optionsJSON: optionsData.options });
@@ -70,7 +74,7 @@ test('register → logout → usernameless Passkey login while preserving recove
 
 	const cdp = await context.newCDPSession(page);
 	await cdp.send('WebAuthn.enable');
-	await cdp.send('WebAuthn.addVirtualAuthenticator', {
+	const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', {
 		options: {
 			protocol: 'ctap2',
 			transport: 'usb',
@@ -87,14 +91,61 @@ test('register → logout → usernameless Passkey login while preserving recove
 	await passwordLogin(page, username);
 	await page.goto('/profile');
 	await page.waitForLoadState('networkidle');
-	await expect(page.getByRole('button', { name: 'Add passkey' })).toBeVisible();
-	const registration = await registerWithVirtualAuthenticator('Virtual security key');
-	expect(registration.status).toBe(200);
-	expect(registration.body.success).toBe(true);
+	// Profile can retain an open responsive navigation dialog after authentication.
+	// Close it so this test exercises the actual security controls beneath it.
+	if (await page.getByRole('dialog').isVisible().catch(() => false)) {
+		await page.keyboard.press('Escape');
+	}
+	const addPasskeyButton = page.getByRole('button', { name: 'Add passkey' });
+	const passkeyNameInput = page.getByLabel('Passkey name');
+	await expect(addPasskeyButton).toBeDisabled();
+	await passkeyNameInput.fill('   ');
+	await expect(addPasskeyButton).toBeDisabled();
+	const missingName = await page.evaluate(async () => {
+		const response = await fetch('/api/auth/passkeys/register/options', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ name: '   ' })
+		});
+		return { status: response.status, body: await response.json() };
+	});
+	expect(missingName.status).toBe(400);
+	expect(missingName.body.error).toBe('Enter a Passkey name');
+
+	await passkeyNameInput.fill('Virtual security key');
+	await expect(addPasskeyButton).toBeEnabled();
+	await addPasskeyButton.click();
+	await expect(page.getByText('Virtual security key', { exact: true })).toBeVisible();
 
 	const listed = await page.evaluate(async () => (await fetch('/api/profile/passkeys')).json());
 	expect(listed.passkeys).toHaveLength(1);
-	const passkeyId = listed.passkeys[0].id as number;
+	expect(listed.passkeys[0].name).toBe('Virtual security key');
+
+	const duplicateName = await registerWithVirtualAuthenticator('  virtual SECURITY KEY  ');
+	expect(duplicateName.status).toBe(409);
+	expect(duplicateName.body.error).toBe('A Passkey with this name already exists');
+	const registeredCredentials = await cdp.send('WebAuthn.getCredentials', { authenticatorId });
+	expect(registeredCredentials.credentials).toHaveLength(1);
+
+	page.once('dialog', async (dialog) => {
+		expect(dialog.type()).toBe('confirm');
+		expect(dialog.message()).toContain('Virtual security key');
+		await dialog.accept();
+	});
+	await page.getByRole('button', { name: 'Delete Passkey Virtual security key' }).click();
+	await expect(page.getByText('Virtual security key', { exact: true })).not.toBeVisible();
+	await cdp.send('WebAuthn.removeCredential', {
+		authenticatorId,
+		credentialId: registeredCredentials.credentials[0].credentialId
+	});
+
+	const loginRegistration = await registerWithVirtualAuthenticator('Login security key');
+	expect(loginRegistration.status).toBe(200);
+	await page.reload({ waitUntil: 'networkidle' });
+	await expect(page.getByText('Login security key', { exact: true })).toBeVisible();
+	const loginPasskeys = await page.evaluate(async () => (await fetch('/api/profile/passkeys')).json());
+	expect(loginPasskeys.passkeys).toHaveLength(1);
+	const passkeyId = loginPasskeys.passkeys[0].id as number;
 
 	const apiToken = await page.evaluate(async ({ password }) => {
 		const response = await fetch('/api/auth/tokens', {
@@ -118,6 +169,12 @@ test('register → logout → usernameless Passkey login while preserving recove
 	const db = new Database(`${dataDir}/db/dockhand.db`);
 	const stored = db.prepare('SELECT * FROM passkey_credentials WHERE id = ?').get(passkeyId) as Record<string, unknown>;
 	expect(stored).toBeTruthy();
+	expect(stored.name).toBe('Login security key');
+	expect(() => db.prepare(`
+		INSERT INTO passkey_credentials
+		(user_id, credential_id, webauthn_user_id, public_key, counter, device_type, backed_up, name)
+		VALUES (?, ?, ?, ?, 0, 'singleDevice', 0, ?)
+	`).run(user.id, 'same-user-different-credential', stored.webauthn_user_id, stored.public_key, 'LOGIN SECURITY KEY')).toThrow(/unique/i);
 
 	// The database enforces global credential uniqueness even across users.
 	const secondCreate = await page.evaluate(async ({ password }) => {
@@ -131,8 +188,8 @@ test('register → logout → usernameless Passkey login while preserving recove
 	expect(secondCreate.status).toBe(201);
 	expect(() => db.prepare(`
 		INSERT INTO passkey_credentials
-		(user_id, credential_id, webauthn_user_id, public_key, counter, device_type, backed_up)
-		VALUES (?, ?, ?, ?, 0, 'singleDevice', 0)
+		(user_id, credential_id, webauthn_user_id, public_key, counter, device_type, backed_up, name)
+		VALUES (?, ?, ?, ?, 0, 'singleDevice', 0, 'Other key')
 	`).run(secondCreate.body.id, stored.credential_id, 'different-handle', stored.public_key)).toThrow(/unique/i);
 
 	// Cross-user management is scoped by both credential row ID and session user ID.

@@ -109,7 +109,6 @@
 	let passkeyActionLoading = $state(false);
 	let passkeyName = $state('');
 	let passkeyError = $state('');
-	let passkeyNames = $state<Record<number, string>>({});
 
 	async function fetchPasskeys() {
 		passkeysLoading = true;
@@ -118,7 +117,6 @@
 			if (response.ok) {
 				const data = await response.json();
 				passkeys = data.passkeys || [];
-				passkeyNames = Object.fromEntries(passkeys.map((passkey) => [passkey.id, passkey.name || '']));
 			}
 		} finally {
 			passkeysLoading = false;
@@ -126,10 +124,19 @@
 	}
 
 	async function addPasskey() {
+		const name = passkeyName.trim();
+		if (!name) {
+			passkeyError = 'Enter a Passkey name';
+			return;
+		}
 		passkeyActionLoading = true;
 		passkeyError = '';
 		try {
-			const optionsResponse = await fetch('/api/auth/passkeys/register/options', { method: 'POST' });
+			const optionsResponse = await fetch('/api/auth/passkeys/register/options', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name })
+			});
 			const optionsData = await optionsResponse.json();
 			if (!optionsResponse.ok) throw new Error(optionsData.error || 'Passkey registration is unavailable');
 
@@ -139,8 +146,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					ceremonyId: optionsData.ceremonyId,
-					response: registrationResponse,
-					name: passkeyName
+					response: registrationResponse
 				})
 			});
 			const verifyData = await verifyResponse.json();
@@ -157,25 +163,10 @@
 		}
 	}
 
-	async function renamePasskey(passkeyId: number) {
+	async function deletePasskey(passkey: Passkey) {
+		if (!window.confirm(`Delete Passkey "${passkey.name || 'Passkey'}"?`)) return;
 		passkeyError = '';
-		const response = await fetch(`/api/profile/passkeys/${passkeyId}`, {
-			method: 'PATCH',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ name: passkeyNames[passkeyId] || '' })
-		});
-		if (response.ok) {
-			await fetchPasskeys();
-			showSuccessMessage('Passkey renamed');
-		} else {
-			const data = await response.json();
-			passkeyError = data.error || 'Failed to rename Passkey';
-		}
-	}
-
-	async function deletePasskey(passkeyId: number) {
-		passkeyError = '';
-		const response = await fetch(`/api/profile/passkeys/${passkeyId}`, { method: 'DELETE' });
+		const response = await fetch(`/api/profile/passkeys/${passkey.id}`, { method: 'DELETE' });
 		if (response.ok) {
 			await fetchPasskeys();
 			showSuccessMessage('Passkey removed');
@@ -741,9 +732,11 @@
 							</div>
 						</div>
 
-						<div class="flex flex-col sm:flex-row gap-2">
-							<Input bind:value={passkeyName} maxlength={64} placeholder="Name (optional), e.g. Token2 key" />
-							<Button onclick={addPasskey} disabled={passkeyActionLoading} class="shrink-0">
+						<div class="space-y-2">
+							<Label for="passkey-name">Passkey name</Label>
+							<div class="flex flex-col sm:flex-row gap-2">
+							<Input id="passkey-name" bind:value={passkeyName} maxlength={64} placeholder="e.g. Token2 security key" />
+							<Button onclick={addPasskey} disabled={passkeyActionLoading || !passkeyName.trim()} class="shrink-0">
 								{#if passkeyActionLoading}
 									<RefreshCw class="w-4 h-4 mr-1 animate-spin" />
 								{:else}
@@ -751,6 +744,7 @@
 								{/if}
 								Add passkey
 							</Button>
+							</div>
 						</div>
 
 						{#if passkeysLoading}
@@ -758,28 +752,27 @@
 						{:else if passkeys.length === 0}
 							<p class="text-sm text-muted-foreground">No Passkeys registered.</p>
 						{:else}
-							<div class="space-y-2">
+							<div class="divide-y rounded-md border">
 								{#each passkeys as passkey (passkey.id)}
-									<div class="flex flex-col gap-2 rounded-md bg-muted/40 p-2">
-										<div class="flex items-center gap-2">
-											<Input bind:value={passkeyNames[passkey.id]} maxlength={64} aria-label="Passkey name" />
-											<Button variant="outline" size="sm" onclick={() => renamePasskey(passkey.id)}>Save</Button>
-											<ConfirmPopover
-												action="remove"
-												itemName={passkeyNames[passkey.id] || 'this Passkey'}
-												itemType="Passkey"
-												confirmText="Remove"
-												onConfirm={() => deletePasskey(passkey.id)}
-											>
-												<Button variant="ghost" size="sm" class="text-destructive hover:text-destructive" aria-label="Remove Passkey">
-													<Trash2 class="w-4 h-4" />
-												</Button>
-											</ConfirmPopover>
-										</div>
-										<p class="text-xs text-muted-foreground">
+									<div class="flex items-center justify-between gap-3 p-3">
+										<div class="min-w-0">
+											<p class="font-medium truncate">{passkey.name || 'Passkey'}</p>
+											<p class="text-xs text-muted-foreground mt-1">
 											{passkey.deviceType === 'multiDevice' ? 'Synced Passkey' : 'Single-device Passkey'}
 											{passkey.backedUp ? ' · backed up' : ''} · added {formatDateTime(passkey.createdAt)}
-										</p>
+											</p>
+										</div>
+										<Button
+											variant="outline"
+											size="sm"
+											class="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+											onclick={() => deletePasskey(passkey)}
+											aria-label={`Delete Passkey ${passkey.name || 'Passkey'}`}
+											title={`Delete Passkey ${passkey.name || 'Passkey'}`}
+										>
+											<Trash2 class="w-4 h-4 mr-1" />
+											Delete
+										</Button>
 									</div>
 								{/each}
 							</div>

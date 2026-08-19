@@ -1,7 +1,10 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from '@sveltejs/kit';
 import { generateRegistrationOptions } from '@simplewebauthn/server';
-import { getPasskeyCredentialsForUser } from '$lib/server/db';
+import {
+	getPasskeyCredentialByNameForUser,
+	getPasskeyCredentialsForUser
+} from '$lib/server/db';
 import { isAuthEnabled, SESSION_COOKIE, validateSession } from '$lib/server/auth';
 import {
 	decodeWebAuthnBytes,
@@ -29,6 +32,19 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 	const sessionId = cookies.get(SESSION_COOKIE);
 	if (!user || !sessionId) return json({ error: 'Not authenticated' }, { status: 401, headers: NO_STORE });
 
+	let name = '';
+	try {
+		const body = await request.json();
+		name = typeof body?.name === 'string' ? body.name.trim() : '';
+	} catch {
+		return json({ error: 'Enter a Passkey name' }, { status: 400, headers: NO_STORE });
+	}
+	if (!name) return json({ error: 'Enter a Passkey name' }, { status: 400, headers: NO_STORE });
+	if (name.length > 64) return json({ error: 'Passkey name must be 64 characters or fewer' }, { status: 400, headers: NO_STORE });
+	if (await getPasskeyCredentialByNameForUser(user.id, name)) {
+		return json({ error: 'A Passkey with this name already exists' }, { status: 409, headers: NO_STORE });
+	}
+
 	const credentials = await getPasskeyCredentialsForUser(user.id);
 	const userHandle = credentials[0]?.webauthnUserId || newWebAuthnUserHandle();
 	const options = await generateRegistrationOptions({
@@ -52,7 +68,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		const ceremony = webAuthnChallenges.issue(options.challenge, 'registration', {
 			userId: user.id,
 			sessionId,
-			userHandle
+			userHandle,
+			passkeyName: name
 		});
 		return json({ ceremonyId: ceremony.id, options }, { headers: NO_STORE });
 	} catch {

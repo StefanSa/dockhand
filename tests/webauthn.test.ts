@@ -93,4 +93,13 @@ describe('Passkey migrations', () => {
 			assert.match(sql, /passkey_credentials_user_id_idx/);
 		}
 	});
+
+	it('backfills existing names and enforces case-insensitive uniqueness per user', () => {
+		for (const path of ['drizzle/0013_passkey_names.sql', 'drizzle-pg/0013_passkey_names.sql']) {
+			const sql = readFileSync(path, 'utf8');
+			assert.match(sql, /UPDATE.*passkey_credentials.*Passkey.*name/is);
+			assert.match(sql, /passkey_credentials_user_name_unique/);
+			assert.match(sql, /user_id.*lower\(["`]?name["`]?\)/is);
+		}
+	});
 });

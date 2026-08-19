@@ -1547,20 +1547,21 @@ export async function getPasskeyCredentialsForUser(userId: number): Promise<Pass
 		.orderBy(asc(passkeyCredentials.createdAt)) as PasskeyCredentialData[];
 }
 
-export async function deletePasskeyCredentialForUser(id: number, userId: number): Promise<boolean> {
-	const rows = await db.delete(passkeyCredentials)
-		.where(and(eq(passkeyCredentials.id, id), eq(passkeyCredentials.userId, userId)))
-		.returning({ id: passkeyCredentials.id });
-	return rows.length === 1;
+export async function getPasskeyCredentialByNameForUser(
+	userId: number,
+	name: string
+): Promise<PasskeyCredentialData | null> {
+	const rows = await db.select().from(passkeyCredentials)
+		.where(and(
+			eq(passkeyCredentials.userId, userId),
+			sql`lower(${passkeyCredentials.name}) = lower(${name})`
+		))
+		.limit(1);
+	return rows[0] as PasskeyCredentialData || null;
 }
 
-export async function updatePasskeyCredentialNameForUser(
-	id: number,
-	userId: number,
-	name: string | null
-): Promise<boolean> {
-	const rows = await db.update(passkeyCredentials)
-		.set({ name })
+export async function deletePasskeyCredentialForUser(id: number, userId: number): Promise<boolean> {
+	const rows = await db.delete(passkeyCredentials)
 		.where(and(eq(passkeyCredentials.id, id), eq(passkeyCredentials.userId, userId)))
 		.returning({ id: passkeyCredentials.id });
 	return rows.length === 1;
