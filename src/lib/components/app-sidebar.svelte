@@ -40,6 +40,8 @@
 	import { selfUpdate } from '$lib/stores/self-update';
 	import { appSettings } from '$lib/stores/settings';
 	import { sidebarPreferencesStore, orderItems } from '$lib/stores/sidebar-preferences';
+	import { swarmCapability } from '$lib/stores/swarm';
+	import { isSwarmEnvironment } from '$lib/types/swarm';
 	import * as Avatar from '$lib/components/ui/avatar';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
@@ -65,6 +67,8 @@
 		permission?: keyof Permissions | 'always';
 		// If true, item is only visible with enterprise license
 		enterpriseOnly?: boolean;
+		// Swarm navigation is environment-scoped and only appears for an active Swarm node.
+		swarmOnly?: boolean;
 	}
 
 	const currentPath = $derived($page.url.pathname);
@@ -94,6 +98,9 @@
 	function canSeeMenuItem(item: MenuItem): boolean {
 		// BETA GATE: hide Backups unless FEAT_BACKUPS_ENABLED is on (see features.ts)
 		if (item.href === '/backups' && !$page.data.backupsEnabled) {
+			return false;
+		}
+		if (item.swarmOnly && !isSwarmEnvironment($swarmCapability.capability)) {
 			return false;
 		}
 
@@ -128,6 +135,7 @@
 		{ href: '/logs', Icon: ScrollText, label: 'Logs', permission: 'containers' },
 		{ href: '/terminal', Icon: Terminal, label: 'Shell', permission: 'containers' },
 		{ href: '/stacks', Icon: Layers, label: 'Stacks', permission: 'stacks' },
+		{ href: '/swarm', Icon: Network, label: 'Swarm', permission: 'swarm', swarmOnly: true },
 		{ href: '/images', Icon: Images, label: 'Images', permission: 'images' },
 		{ href: '/volumes', Icon: HardDrive, label: 'Volumes', permission: 'volumes' },
 		{ href: '/networks', Icon: Network, label: 'Networks', permission: 'networks' },

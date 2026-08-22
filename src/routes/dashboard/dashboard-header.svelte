@@ -18,6 +18,8 @@
 	import EnvironmentIcon from '$lib/components/EnvironmentIcon.svelte';
 	import { goto } from '$app/navigation';
 	import { canAccess } from '$lib/stores/auth';
+	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
+	import type { SwarmCapability } from '$lib/types/swarm';
 
 	type ConnectionType = 'socket' | 'direct' | 'hawser-standard' | 'hawser-edge';
 
@@ -35,6 +37,7 @@
 		updateCheckAutoUpdate?: boolean;
 		connectionType?: ConnectionType;
 		environmentId: number;
+		swarm?: SwarmCapability;
 		width?: number;
 		height?: number;
 		compact?: boolean;
@@ -58,6 +61,7 @@
 		updateCheckAutoUpdate = false,
 		connectionType = 'socket',
 		environmentId,
+		swarm,
 		width = 1,
 		height = 1,
 		compact = false
@@ -91,6 +95,7 @@
 		<div class="min-w-0 flex-1">
 			<div class="flex items-center gap-1.5">
 				<span class="font-medium text-sm truncate">{name}</span>
+				<SwarmBadge capability={swarm} compact />
 				{#if showConnecting}
 					<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 				{:else if showOffline}
@@ -129,6 +134,7 @@
 			<div class="min-w-0 flex-1">
 				<div class="flex items-center gap-1.5">
 					<span class="font-medium text-sm truncate">{name}</span>
+					<SwarmBadge capability={swarm} />
 					{#if showConnecting}
 						<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 					{:else if showOffline}

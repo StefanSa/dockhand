@@ -6,6 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { canAccess } from '$lib/stores/auth';
 	import type { EnvironmentStats } from '../api/dashboard/stats/+server';
+	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import {
 		DashboardHeader,
 		DashboardLabels,
@@ -84,6 +85,7 @@
 					<div class="min-w-0 overflow-hidden">
 						<div class="flex items-center gap-1.5">
 							<span class="font-medium text-sm truncate">{stats.name}</span>
+							<SwarmBadge capability={stats.swarm} compact />
 							{#if showConnecting}
 								<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 							{:else if showOffline}
@@ -180,6 +182,7 @@
 					<div class="min-w-0 overflow-hidden">
 						<div class="flex items-center gap-1.5">
 							<span class="font-medium text-sm truncate">{stats.name}</span>
+							<SwarmBadge capability={stats.swarm} compact />
 							{#if showConnecting}
 								<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 							{:else if showOffline}
@@ -283,6 +286,7 @@
 				<div class="min-w-0 overflow-hidden">
 					<div class="flex items-center gap-1.5">
 						<span class="font-medium text-sm truncate">{stats.name}</span>
+						<SwarmBadge capability={stats.swarm} compact />
 						{#if showConnecting}
 							<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 						{:else if showOffline}
@@ -384,6 +388,7 @@
 				<div class="min-w-0 overflow-hidden">
 					<div class="flex items-center gap-1.5">
 						<span class="font-medium text-sm truncate">{stats.name}</span>
+						<SwarmBadge capability={stats.swarm} compact />
 						{#if showConnecting}
 							<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 						{:else if showOffline}
@@ -488,6 +493,7 @@
 				<div class="min-w-0 overflow-hidden">
 					<div class="flex items-center gap-1.5">
 						<span class="font-medium text-sm truncate">{stats.name}</span>
+						<SwarmBadge capability={stats.swarm} compact />
 						{#if showConnecting}
 							<Loader2 class="w-3 h-3 text-muted-foreground animate-spin shrink-0" />
 						{:else if showOffline}
@@ -581,6 +587,7 @@
 				updateCheckAutoUpdate={stats.updateCheckAutoUpdate}
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
+				swarm={stats.swarm}
 				{width}
 				{height}
 			/>
@@ -627,6 +634,7 @@
 				updateCheckAutoUpdate={stats.updateCheckAutoUpdate}
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
+				swarm={stats.swarm}
 				{width}
 				{height}
 			/>
@@ -679,6 +687,7 @@
 				updateCheckAutoUpdate={stats.updateCheckAutoUpdate}
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
+				swarm={stats.swarm}
 				{width}
 				{height}
 			/>

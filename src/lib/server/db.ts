@@ -1322,6 +1322,7 @@ export interface Permissions {
 	volumes: string[];
 	networks: string[];
 	stacks: string[];
+	swarm: string[];
 	environments: string[];
 	registries: string[];
 	notifications: string[];

@@ -20,6 +20,7 @@ import { listComposeStacks } from '$lib/server/stacks';
 import { countLivePending } from '$lib/server/pending-updates-core';
 import { authorize } from '$lib/server/authorize';
 import { parseLabels } from '$lib/utils/label-colors';
+import { parseSwarmCapability, type SwarmCapability } from '$lib/types/swarm';
 
 // Skip disk usage collection (Synology NAS performance fix)
 const SKIP_DF_COLLECTION = process.env.SKIP_DF_COLLECTION === 'true' || process.env.SKIP_DF_COLLECTION === '1';
@@ -57,6 +58,7 @@ export interface EnvironmentStats {
 	updateCheckAutoUpdate: boolean;
 	labels?: string[];
 	connectionType: 'socket' | 'direct' | 'hawser-standard' | 'hawser-edge';
+	swarm?: SwarmCapability;
 	online?: boolean; // undefined = connecting, false = offline, true = online
 	error?: string;
 	containers: {
@@ -212,6 +214,7 @@ export const GET: RequestHandler = async ({ cookies, url }) => {
 					return envStats;
 				}
 				envStats.online = true;
+				envStats.swarm = parseSwarmCapability(dockerInfo);
 
 				// Fetch all data in parallel (with 10 second timeout per operation)
 				// Disk usage can be disabled with SKIP_DF_COLLECTION for Synology NAS devices

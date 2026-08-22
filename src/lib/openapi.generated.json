@@ -129,6 +129,9 @@
       "name": "stacks"
     },
     {
+      "name": "swarm"
+    },
+    {
       "name": "system"
     },
     {
@@ -10312,6 +10315,95 @@
           },
           "500": {
             "description": "Environment name is empty/whitespace (refuses to delete to avoid an unsafe directory cleanup), or an unexpected error"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/environments/{id}/capabilities": {
+      "get": {
+        "operationId": "get_api_environments_id_capabilities",
+        "tags": [
+          "environments"
+        ],
+        "summary": "Detect Docker and Swarm capabilities for an environment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Environment id (from GET /api/environments)"
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Bypass the short-lived capability cache"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string"
+                    },
+                    "localNodeState": {
+                      "type": "string"
+                    },
+                    "controlAvailable": {
+                      "type": "boolean"
+                    },
+                    "nodeId": {
+                      "type": "string"
+                    },
+                    "clusterId": {
+                      "type": "string"
+                    },
+                    "apiVersion": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "example": {
+                  "kind": "string",
+                  "localNodeState": "string",
+                  "controlAvailable": true,
+                  "nodeId": "string",
+                  "clusterId": "string",
+                  "apiVersion": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid environment ID"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
           }
         },
         "security": [
@@ -25752,6 +25844,100 @@
             }
           }
         }
+      }
+    },
+    "/api/swarm": {
+      "get": {
+        "operationId": "get_api_swarm",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Get a read-only Swarm overview with cluster, node, service, and task data",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Environment id (from GET /api/environments)"
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Refresh the environment capability before reading Swarm data"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "capability": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "managerEndpointRequired": {
+                      "type": "boolean"
+                    },
+                    "cluster": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "nodes": {
+                      "type": "string"
+                    },
+                    "services": {
+                      "type": "string"
+                    },
+                    "tasks": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "managerEndpointRequired"
+                  ]
+                },
+                "example": {
+                  "capability": {},
+                  "managerEndpointRequired": true,
+                  "cluster": {},
+                  "nodes": "string",
+                  "services": "string",
+                  "tasks": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A valid environment ID is required"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "502": {
+            "description": "The Docker endpoint rejected or failed a Swarm API request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/system": {

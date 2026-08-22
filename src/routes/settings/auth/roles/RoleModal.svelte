@@ -55,6 +55,7 @@
 		volumes: string[];
 		networks: string[];
 		stacks: string[];
+		swarm: string[];
 		environments: string[];
 		registries: string[];
 		notifications: string[];
@@ -74,6 +75,7 @@
 		volumes: [],
 		networks: [],
 		stacks: [],
+		swarm: [],
 		environments: [],
 		registries: [],
 		notifications: [],
@@ -203,6 +205,9 @@
 			{ key: 'stop', label: 'Stop stacks' },
 			{ key: 'remove', label: 'Remove stacks' },
 			{ key: 'edit', label: 'Edit stacks' }
+		],
+		swarm: [
+			{ key: 'view', label: 'View Swarm resources' }
 		]
 	};
 
@@ -212,6 +217,7 @@
 		volumes: HardDrive,
 		networks: Cable,
 		stacks: Layers,
+		swarm: GitBranch,
 		environments: Globe,
 		registries: Download,
 		notifications: Bell,
@@ -233,6 +239,7 @@
 		volumes: 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-800',
 		networks: 'bg-green-100 dark:bg-green-950 text-green-700 dark:text-green-400 border-green-300 dark:border-green-800',
 		stacks: 'bg-cyan-100 dark:bg-cyan-950 text-cyan-700 dark:text-cyan-400 border-cyan-300 dark:border-cyan-800',
+		swarm: 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-400 border-blue-300 dark:border-blue-800',
 		environments: 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-400 border-indigo-300 dark:border-indigo-800',
 		registries: 'bg-pink-100 dark:bg-pink-950 text-pink-700 dark:text-pink-400 border-pink-300 dark:border-pink-800',
 		notifications: 'bg-orange-100 dark:bg-orange-950 text-orange-700 dark:text-orange-400 border-orange-300 dark:border-orange-800',
@@ -284,6 +291,7 @@
 			volumes: [],
 			networks: [],
 			stacks: [],
+			swarm: [],
 			environments: [],
 			registries: [],
 			notifications: [],
@@ -316,6 +324,7 @@
 					volumes: [...(role.permissions.volumes || [])],
 					networks: [...(role.permissions.networks || [])],
 					stacks: [...(role.permissions.stacks || [])],
+					swarm: [...(role.permissions.swarm || [])],
 					environments: [...(role.permissions.environments || [])],
 					registries: [...(role.permissions.registries || [])],
 					notifications: [...(role.permissions.notifications || [])],
@@ -346,6 +355,7 @@
 					volumes: [...(copyFrom.permissions.volumes || [])],
 					networks: [...(copyFrom.permissions.networks || [])],
 					stacks: [...(copyFrom.permissions.stacks || [])],
+					swarm: [...(copyFrom.permissions.swarm || [])],
 					environments: [...(copyFrom.permissions.environments || [])],
 					registries: [...(copyFrom.permissions.registries || [])],
 					notifications: [...(copyFrom.permissions.notifications || [])],

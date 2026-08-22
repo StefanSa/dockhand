@@ -4,6 +4,7 @@ import { existsSync, rmSync, renameSync } from 'fs';
 import type { RequestHandler } from './$types';
 import { getEnvironment, updateEnvironment, deleteEnvironment, getEnvironmentPublicIps, setEnvironmentPublicIp, deleteEnvironmentPublicIp, deleteEnvUpdateCheckSettings, deleteImagePruneSettings, getGitStacksForEnvironmentOnly, deleteGitStack, getBackupConfigs } from '$lib/server/db';
 import { clearDockerClientCache } from '$lib/server/docker';
+import { clearSwarmCapabilityCache } from '$lib/server/swarm';
 import { deleteGitStackFiles, getGitReposDir } from '$lib/server/git';
 import { getStacksDir } from '$lib/server/stacks';
 import { authorize } from '$lib/server/authorize';
@@ -149,6 +150,7 @@ export const PUT: RequestHandler = async (event) => {
 
 		// Clear cached Docker client before updating
 		clearDockerClientCache(id);
+		clearSwarmCapabilityCache(id);
 
 		// Handle labels - only update if provided in the request
 		const labels = data.labels !== undefined
@@ -257,6 +259,7 @@ export const DELETE: RequestHandler = async (event) => {
 
 		// Clear cached Docker client before deleting
 		clearDockerClientCache(id);
+		clearSwarmCapabilityCache(id);
 
 		// Clean up git stacks for this environment
 		const gitStacks = await getGitStacksForEnvironmentOnly(id);
