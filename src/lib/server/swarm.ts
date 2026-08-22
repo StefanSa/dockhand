@@ -6,6 +6,11 @@ import {
 	type SwarmCapability,
 	type SwarmReadModel
 } from '$lib/types/swarm';
+import {
+	performSwarmServiceAction,
+	type SwarmServiceAction,
+	type SwarmServiceActionResult
+} from './swarm-service';
 
 const CAPABILITY_CACHE_TTL_MS = 30_000;
 const UNKNOWN_CACHE_TTL_MS = 5_000;
@@ -70,5 +75,19 @@ export async function getSwarmReadModel(environmentId: number, refreshCapability
 	return loadSwarmReadModel(
 		capability,
 		(path) => dockerJsonRequest<unknown>(path, {}, environmentId)
+	);
+}
+
+export async function updateSwarmService(
+	environmentId: number,
+	serviceId: string,
+	action: SwarmServiceAction
+): Promise<SwarmServiceActionResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmServiceAction(
+		capability,
+		serviceId,
+		action,
+		(path, options = {}) => dockerJsonRequest<unknown>(path, options, environmentId)
 	);
 }

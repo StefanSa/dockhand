@@ -207,7 +207,8 @@
 			{ key: 'edit', label: 'Edit stacks' }
 		],
 		swarm: [
-			{ key: 'view', label: 'View Swarm resources' }
+			{ key: 'view', label: 'View Swarm resources' },
+			{ key: 'update', label: 'Manage Swarm services' }
 		]
 	};
 
@@ -272,6 +273,7 @@
 		connect: Plug,
 		disconnect: Unplug,
 		edit: Pencil,
+		update: RefreshCw,
 		test: Play,
 		run: Play,
 		manage: Settings

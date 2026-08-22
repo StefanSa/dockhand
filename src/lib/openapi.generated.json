@@ -25940,6 +25940,126 @@
         ]
       }
     },
+    "/api/swarm/services/{id}": {
+      "post": {
+        "operationId": "post_api_swarm_services_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Scale or force-update an existing Swarm service on a manager environment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm service ID (from GET /api/swarm)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "action",
+                    "version",
+                    "warnings"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "action": "string",
+                  "version": 0,
+                  "warnings": [
+                    "string"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid action, replica count, service ID, or unsupported service mode"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or service not found"
+          },
+          "409": {
+            "description": "The environment is not a Swarm manager, or the service changed concurrently"
+          },
+          "502": {
+            "description": "The Docker endpoint rejected or failed the service update"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "replicas": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              "example": {
+                "action": "scale",
+                "replicas": 3
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/system": {
       "get": {
         "operationId": "get_api_system",

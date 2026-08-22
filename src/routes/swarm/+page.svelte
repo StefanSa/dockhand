@@ -4,20 +4,25 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal } from 'lucide-svelte';
 	import type { Component } from 'svelte';
+	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Card from '$lib/components/ui/card';
+	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { NoEnvironment } from '$lib/components/ui/empty-state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import { currentEnvironment } from '$lib/stores/environment';
+	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
-	import type { SwarmReadModel } from '$lib/types/swarm';
+	import type { SwarmReadModel, SwarmServiceSummary } from '$lib/types/swarm';
 
 	const POLL_INTERVAL_MS = 30_000;
 	const SwarmIcon = Network as unknown as Component;
@@ -29,6 +34,12 @@
 	let refreshing = $state(false);
 	let error = $state<string | null>(null);
 	let requestSequence = 0;
+	let actionDialogOpen = $state(false);
+	let actionService = $state<SwarmServiceSummary | null>(null);
+	let actionType = $state<'scale' | 'force-update'>('scale');
+	let scaleReplicas = $state('');
+	let actionPending = $state(false);
+	let actionError = $state<string | null>(null);
 
 	async function load(refresh = false): Promise<void> {
 		if (!environmentId) return;
@@ -81,6 +92,67 @@
 		return data?.nodes.find((node) => node.id === nodeId)?.hostname ?? nodeId?.slice(0, 12) ?? 'Unassigned';
 	}
 
+	function openScaleDialog(service: SwarmServiceSummary): void {
+		actionService = service;
+		actionType = 'scale';
+		scaleReplicas = String(service.desiredTasks ?? 0);
+		actionError = null;
+		actionDialogOpen = true;
+	}
+
+	function openForceUpdateDialog(service: SwarmServiceSummary): void {
+		actionService = service;
+		actionType = 'force-update';
+		actionError = null;
+		actionDialogOpen = true;
+	}
+
+	function closeActionDialog(): void {
+		if (actionPending) return;
+		actionDialogOpen = false;
+		actionService = null;
+		actionError = null;
+	}
+
+	async function confirmServiceAction(): Promise<void> {
+		if (!environmentId || !actionService || actionPending) return;
+		const replicas = Number(scaleReplicas);
+		if (actionType === 'scale' && (!Number.isSafeInteger(replicas) || replicas < 0)) {
+			actionError = 'Replicas must be a non-negative integer.';
+			return;
+		}
+
+		actionPending = true;
+		actionError = null;
+		try {
+			const response = await fetch(`/api/swarm/services/${encodeURIComponent(actionService.id)}?env=${environmentId}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(actionType === 'scale'
+					? { action: 'scale', replicas }
+					: { action: 'force-update' })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || 'Failed to update Swarm service');
+
+			const serviceName = actionService.name;
+			actionDialogOpen = false;
+			actionService = null;
+			toast.success(actionType === 'scale'
+				? `${serviceName} desired replicas set to ${replicas}`
+				: `${serviceName} restart requested`);
+			if (Array.isArray(body.warnings) && body.warnings.length > 0) {
+				toast.warning(body.warnings.join(' '));
+			}
+			await load(true);
+		} catch (actionFailure) {
+			actionError = actionFailure instanceof Error ? actionFailure.message : 'Failed to update Swarm service';
+			toast.error(actionError);
+		} finally {
+			actionPending = false;
+		}
+	}
+
 	onMount(() => {
 		const unsubscribe = currentEnvironment.subscribe((environment) => {
 			const nextId = environment?.id ?? null;
@@ -88,11 +160,12 @@
 			environmentId = nextId;
 			data = null;
 			error = null;
+			closeActionDialog();
 			requestSequence++;
 			if (nextId) void load(true);
 		});
 		const interval = setInterval(() => {
-			if (environmentId && !loading && !refreshing) void load(false);
+			if (environmentId && !loading && !refreshing && !actionPending) void load(false);
 		}, POLL_INTERVAL_MS);
 
 		return () => {
@@ -223,7 +296,7 @@
 
 			<Tabs.Content value="services" class="min-h-0 overflow-auto rounded-md border">
 				<Table.Root>
-					<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>Image</Table.Head><Table.Head>Mode</Table.Head><Table.Head>Tasks</Table.Head><Table.Head>Update state</Table.Head><Table.Head>Placement</Table.Head></Table.Row></Table.Header>
+					<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>Image</Table.Head><Table.Head>Mode</Table.Head><Table.Head>Tasks</Table.Head><Table.Head>Update state</Table.Head><Table.Head>Placement</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
 					<Table.Body>
 						{#each data.services as service (service.id)}
 							<Table.Row>
@@ -233,6 +306,22 @@
 								<Table.Cell>{service.runningTasks} / {service.desiredTasks ?? '—'}{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} complete</div>{/if}</Table.Cell>
 								<Table.Cell class="capitalize">{service.updateStatus?.state ?? '—'}</Table.Cell>
 								<Table.Cell class="max-w-[22rem] text-xs">{service.constraints.join(', ') || 'No constraints'}</Table.Cell>
+								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+									<Table.Cell>
+										<div class="flex justify-end gap-2">
+											{#if service.mode === 'replicated'}
+												<Button variant="outline" size="sm" onclick={() => openScaleDialog(service)} disabled={actionPending}>
+													<SlidersHorizontal class="h-4 w-4" /> Scale
+												</Button>
+											{/if}
+											{#if service.mode === 'replicated' || service.mode === 'global'}
+												<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
+													<RotateCw class="h-4 w-4" /> Restart
+												</Button>
+											{/if}
+										</div>
+									</Table.Cell>
+								{/if}
 							</Table.Row>
 						{/each}
 					</Table.Body>
@@ -263,3 +352,37 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root bind:open={actionDialogOpen} onOpenChange={(open) => { if (!open) closeActionDialog(); }}>
+	<Dialog.Content class="max-w-md">
+		<Dialog.Header>
+			<Dialog.Title>{actionType === 'scale' ? 'Scale Swarm service' : 'Restart Swarm service'}</Dialog.Title>
+			<Dialog.Description>
+				{#if actionType === 'scale'}
+					Change the desired replica count for <strong>{actionService?.name}</strong>. Swarm will reconcile the service to this value.
+				{:else}
+					Force-update <strong>{actionService?.name}</strong>? Swarm will replace all current service tasks using the existing service specification.
+				{/if}
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if actionType === 'scale'}
+			<div class="space-y-2">
+				<Label for="swarm-service-replicas">Replicas</Label>
+				<Input id="swarm-service-replicas" type="number" min="0" step="1" bind:value={scaleReplicas} disabled={actionPending} />
+			</div>
+		{/if}
+		{#if actionError}
+			<Alert.Root variant="destructive">
+				<TriangleAlert class="h-4 w-4" />
+				<Alert.Description>{actionError}</Alert.Description>
+			</Alert.Root>
+		{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeActionDialog} disabled={actionPending}>Cancel</Button>
+			<Button onclick={confirmServiceAction} disabled={actionPending}>
+				{#if actionPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+				{actionType === 'scale' ? 'Scale service' : 'Restart service'}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>

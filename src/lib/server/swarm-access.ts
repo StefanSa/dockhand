@@ -1,12 +1,27 @@
-interface SwarmReadAuthorization {
-	requirePermission(resource: 'swarm', action: 'view', environmentId: number): Promise<Response | null>;
+interface SwarmAuthorization {
+	requirePermission(resource: 'swarm', action: string, environmentId: number): Promise<Response | null>;
 	requireEnvAccess(environmentId: number): Promise<Response | null>;
 }
 
-export async function requireSwarmReadAccess(
-	auth: SwarmReadAuthorization,
+async function requireSwarmAccess(
+	auth: SwarmAuthorization,
+	action: 'view' | 'update',
 	environmentId: number
 ): Promise<Response | null> {
-	return (await auth.requirePermission('swarm', 'view', environmentId))
+	return (await auth.requirePermission('swarm', action, environmentId))
 		?? (await auth.requireEnvAccess(environmentId));
+}
+
+export async function requireSwarmReadAccess(
+	auth: SwarmAuthorization,
+	environmentId: number
+): Promise<Response | null> {
+	return requireSwarmAccess(auth, 'view', environmentId);
+}
+
+export async function requireSwarmUpdateAccess(
+	auth: SwarmAuthorization,
+	environmentId: number
+): Promise<Response | null> {
+	return requireSwarmAccess(auth, 'update', environmentId);
 }
