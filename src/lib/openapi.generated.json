@@ -25940,6 +25940,129 @@
         ]
       }
     },
+    "/api/swarm/nodes/{id}": {
+      "post": {
+        "operationId": "post_api_swarm_nodes_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Change availability or role for an existing Swarm node",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm node ID (from GET /api/swarm)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": "integer"
+                    },
+                    "role": {
+                      "type": "string"
+                    },
+                    "availability": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "action",
+                    "version",
+                    "role",
+                    "availability"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "action": "string",
+                  "version": 0,
+                  "role": "string",
+                  "availability": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid action, availability, role, node ID, or environment ID"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or node not found"
+          },
+          "409": {
+            "description": "Manager endpoint required, last-manager protection, invalid state, or stale node version"
+          },
+          "502": {
+            "description": "Docker endpoint rejected or failed the node update"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "availability": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              "example": {
+                "action": "availability",
+                "availability": "drain"
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/swarm/services/{id}": {
       "post": {
         "operationId": "post_api_swarm_services_id",

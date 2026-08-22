@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2 } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -24,7 +24,11 @@
 	import { currentEnvironment } from '$lib/stores/environment';
 	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
-	import type { SwarmReadModel, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
+	import type { SwarmNodeSummary, SwarmReadModel, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
+
+	type NodeDialogAction =
+		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
+		| { type: 'role'; role: 'worker' | 'manager' };
 
 	const POLL_INTERVAL_MS = 30_000;
 	const SwarmIcon = Network as unknown as Component;
@@ -51,6 +55,11 @@
 	let removeStackDialogOpen = $state(false);
 	let removeStackName = $state('');
 	let removeStackFiles = $state(false);
+	let nodeDialogOpen = $state(false);
+	let actionNode = $state<SwarmNodeSummary | null>(null);
+	let nodeAction = $state<NodeDialogAction | null>(null);
+	let nodeActionPending = $state(false);
+	let nodeActionError = $state<string | null>(null);
 
 	async function load(refresh = false): Promise<void> {
 		if (!environmentId) return;
@@ -101,6 +110,54 @@
 
 	function nodeName(nodeId: string | undefined): string {
 		return data?.nodes.find((node) => node.id === nodeId)?.hostname ?? nodeId?.slice(0, 12) ?? 'Unassigned';
+	}
+
+	function openNodeActionDialog(node: SwarmNodeSummary, action: NodeDialogAction): void {
+		actionNode = node;
+		nodeAction = action;
+		nodeActionError = null;
+		nodeDialogOpen = true;
+	}
+
+	function closeNodeActionDialog(): void {
+		if (nodeActionPending) return;
+		nodeDialogOpen = false;
+		actionNode = null;
+		nodeAction = null;
+		nodeActionError = null;
+	}
+
+	async function confirmNodeAction(): Promise<void> {
+		if (!environmentId || !actionNode || !nodeAction || nodeActionPending) return;
+		nodeActionPending = true;
+		nodeActionError = null;
+		try {
+			const response = await fetch(`/api/swarm/nodes/${encodeURIComponent(actionNode.id)}?env=${environmentId}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(nodeAction.type === 'availability'
+					? { action: 'availability', availability: nodeAction.availability }
+					: { action: 'role', role: nodeAction.role })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || 'Failed to update Swarm node');
+
+			const hostname = actionNode.hostname;
+			const description = nodeAction.type === 'availability'
+				? `availability set to ${nodeAction.availability}`
+				: `role set to ${nodeAction.role}`;
+			nodeDialogOpen = false;
+			actionNode = null;
+			nodeAction = null;
+			toast.success(`${hostname} ${description}`);
+			await load(true);
+			activeTab = 'nodes';
+		} catch (actionFailure) {
+			nodeActionError = actionFailure instanceof Error ? actionFailure.message : 'Failed to update Swarm node';
+			toast.error(nodeActionError);
+		} finally {
+			nodeActionPending = false;
+		}
 	}
 
 	function openScaleDialog(service: SwarmServiceSummary): void {
@@ -265,13 +322,14 @@
 			data = null;
 			error = null;
 			closeActionDialog();
+			closeNodeActionDialog();
 			closeStackDialog();
 			removeStackDialogOpen = false;
 			requestSequence++;
 			if (nextId) void load(true);
 		});
 		const interval = setInterval(() => {
-			if (environmentId && !loading && !refreshing && !actionPending && !stackPending) void load(false);
+			if (environmentId && !loading && !refreshing && !actionPending && !nodeActionPending && !stackPending) void load(false);
 		}, POLL_INTERVAL_MS);
 
 		return () => {
@@ -391,17 +449,29 @@
 
 			<Tabs.Content value="nodes" class="min-h-0 overflow-auto rounded-md border">
 				<Table.Root>
-					<Table.Header><Table.Row><Table.Head>Node</Table.Head><Table.Head>Role</Table.Head><Table.Head>Availability</Table.Head><Table.Head>Status</Table.Head><Table.Head>Manager</Table.Head><Table.Head>Engine</Table.Head><Table.Head>Resources</Table.Head></Table.Row></Table.Header>
+					<Table.Header><Table.Row><Table.Head>Node</Table.Head><Table.Head>Role</Table.Head><Table.Head>Availability</Table.Head><Table.Head>Status</Table.Head><Table.Head>Manager</Table.Head><Table.Head>Engine</Table.Head><Table.Head>Resources</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
 					<Table.Body>
 						{#each data.nodes as node (node.id)}
 							<Table.Row>
 								<Table.Cell><div class="font-medium">{node.hostname}</div><div class="text-xs text-muted-foreground font-mono">{node.address ?? node.id.slice(0, 12)}</div></Table.Cell>
-								<Table.Cell class="capitalize">{node.role}</Table.Cell>
-								<Table.Cell><Badge variant="outline" class="capitalize">{node.availability}</Badge></Table.Cell>
+								<Table.Cell><Badge variant={node.role === 'manager' ? 'secondary' : 'outline'} class="capitalize">{node.role}</Badge></Table.Cell>
+								<Table.Cell><Badge variant={node.availability === 'active' ? 'secondary' : node.availability === 'drain' ? 'destructive' : 'outline'} class="capitalize">{node.availability}</Badge></Table.Cell>
 								<Table.Cell><Badge variant={node.status === 'ready' ? 'secondary' : 'destructive'} class="capitalize">{node.status}</Badge></Table.Cell>
 								<Table.Cell>{node.managerStatus?.leader ? 'Leader' : node.managerStatus?.reachability ?? '—'}</Table.Cell>
 								<Table.Cell>{node.engineVersion ?? '—'}<div class="text-xs text-muted-foreground">{node.platform?.os ?? ''} {node.platform?.architecture ?? ''}</div></Table.Cell>
 								<Table.Cell>{formatCpu(node.resources?.nanoCpus)}<div class="text-xs text-muted-foreground">{formatBytes(node.resources?.memoryBytes)}</div></Table.Cell>
+								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+									<Table.Cell>
+										<div class="flex flex-wrap justify-end gap-1">
+											<Button size="sm" variant="outline" onclick={() => openNodeActionDialog(node, { type: 'availability', availability: 'active' })} disabled={nodeActionPending || node.availability === 'active'}>Active</Button>
+											<Button size="sm" variant="outline" onclick={() => openNodeActionDialog(node, { type: 'availability', availability: 'pause' })} disabled={nodeActionPending || node.availability === 'pause'}>Pause</Button>
+											<Button size="sm" variant="destructive" onclick={() => openNodeActionDialog(node, { type: 'availability', availability: 'drain' })} disabled={nodeActionPending || node.availability === 'drain'}>Drain</Button>
+											<Button size="sm" variant="outline" onclick={() => openNodeActionDialog(node, { type: 'role', role: node.role === 'manager' ? 'worker' : 'manager' })} disabled={nodeActionPending}>
+												<Wrench class="h-4 w-4" /> {node.role === 'manager' ? 'Demote' : 'Promote'}
+											</Button>
+										</div>
+									</Table.Cell>
+								{/if}
 							</Table.Row>
 						{/each}
 					</Table.Body>
@@ -494,6 +564,46 @@
 		</div>
 	{/if}
 </div>
+
+<Dialog.Root bind:open={nodeDialogOpen} onOpenChange={(open) => { if (!open) closeNodeActionDialog(); }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>
+				{#if nodeAction?.type === 'availability'}Set {actionNode?.hostname} to {nodeAction.availability}?{:else if nodeAction?.type === 'role'}Change {actionNode?.hostname} role to {nodeAction.role}?{/if}
+			</Dialog.Title>
+			<Dialog.Description>
+				{#if nodeAction?.type === 'availability' && nodeAction.availability === 'drain'}
+					Swarm will stop assigning tasks to this node and reschedule its service tasks where placement constraints and capacity allow.
+				{:else if nodeAction?.type === 'availability' && nodeAction.availability === 'pause'}
+					Swarm will keep existing tasks running but will not assign new tasks to this node.
+				{:else if nodeAction?.type === 'availability'}
+					Swarm will make this node eligible for task assignment again.
+				{:else if nodeAction?.type === 'role' && nodeAction.role === 'manager'}
+					This node will join the Raft manager set and participate in cluster management and quorum.
+				{:else if nodeAction?.type === 'role'}
+					This manager will become a worker. Dockhand blocks the update if it is the last manager, but you should still confirm cluster quorum is healthy.
+				{/if}
+			</Dialog.Description>
+		</Dialog.Header>
+		{#if nodeActionError}
+			<Alert.Root variant="destructive">
+				<TriangleAlert class="h-4 w-4" />
+				<Alert.Description>{nodeActionError}</Alert.Description>
+			</Alert.Root>
+		{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeNodeActionDialog} disabled={nodeActionPending}>Cancel</Button>
+			<Button
+				variant={nodeAction?.type === 'availability' && nodeAction.availability === 'drain' || nodeAction?.type === 'role' && nodeAction.role === 'worker' ? 'destructive' : 'default'}
+				onclick={confirmNodeAction}
+				disabled={nodeActionPending}
+			>
+				{#if nodeActionPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+				Confirm node update
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root bind:open={actionDialogOpen} onOpenChange={(open) => { if (!open) closeActionDialog(); }}>
 	<Dialog.Content class="max-w-md">

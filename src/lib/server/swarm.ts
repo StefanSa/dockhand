@@ -1,4 +1,4 @@
-import { dockerJsonRequest, getDockerInfo, getDockerVersion } from './docker';
+import { dockerFetch, dockerJsonRequest, getDockerInfo, getDockerVersion } from './docker';
 import {
 	loadSwarmReadModel,
 	parseSwarmCapability,
@@ -11,6 +11,11 @@ import {
 	type SwarmServiceAction,
 	type SwarmServiceActionResult
 } from './swarm-service';
+import {
+	performSwarmNodeAction,
+	type SwarmNodeAction,
+	type SwarmNodeActionResult
+} from './swarm-node';
 
 const CAPABILITY_CACHE_TTL_MS = 30_000;
 const UNKNOWN_CACHE_TTL_MS = 5_000;
@@ -89,5 +94,47 @@ export async function updateSwarmService(
 		serviceId,
 		action,
 		(path, options = {}) => dockerJsonRequest<unknown>(path, options, environmentId)
+	);
+}
+
+async function nodeRequest(
+	environmentId: number,
+	path: string,
+	options: RequestInit = {}
+): Promise<unknown> {
+	if (options.method !== 'POST') {
+		return dockerJsonRequest<unknown>(path, options, environmentId);
+	}
+
+	const response = await dockerFetch(path, {
+		...options,
+		headers: { 'Content-Type': 'application/json', ...options.headers }
+	}, environmentId);
+	if (!response.ok) {
+		const text = await response.text();
+		let message = text;
+		try {
+			message = JSON.parse(text).message || text;
+		} catch {
+			// Docker may return plain text for proxy or daemon errors.
+		}
+		const error: any = new Error(message || `Docker API error: ${response.status}`);
+		error.statusCode = response.status;
+		throw error;
+	}
+	return undefined;
+}
+
+export async function updateSwarmNode(
+	environmentId: number,
+	nodeId: string,
+	action: SwarmNodeAction
+): Promise<SwarmNodeActionResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmNodeAction(
+		capability,
+		nodeId,
+		action,
+		(path, options = {}) => nodeRequest(environmentId, path, options)
 	);
 }
