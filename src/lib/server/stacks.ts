@@ -68,7 +68,7 @@ interface TlsConfig {
 /**
  * Stack source types
  */
-export type StackSourceType = 'internal' | 'git' | 'external';
+export type StackSourceType = 'internal' | 'git' | 'external' | 'swarm';
 
 /**
  * Stack operation result
@@ -634,6 +634,7 @@ export async function saveStackComposeFile(
 		oldComposePath?: string;  // Old compose file path for renaming
 		oldEnvPath?: string;  // Old env file path for renaming
 		secretProviderId?: number | null;  // secret provider binding (undefined = unchanged)
+		sourceType?: StackSourceType;  // Defaults to internal; Swarm stacks remain distinct
 	}
 ): Promise<{ success: boolean; error?: string }> {
 	// Validate stack name - Docker Compose requires lowercase alphanumeric, hyphens, underscores
@@ -801,7 +802,7 @@ export async function saveStackComposeFile(
 		await upsertStackSource({
 			stackName: name,
 			environmentId: envId ?? null,
-			sourceType: 'internal',
+			sourceType: options?.sourceType ?? 'internal',
 			composePath: options?.composePath || source?.composePath || null,
 			envPath: options?.envPath !== undefined ? options.envPath : (source?.envPath ?? null),
 			secretProviderId:
@@ -2497,6 +2498,24 @@ export async function computeStackDeletionPaths(
 	}
 
 	return { stackDir, gitDir, sourceType: stackSource?.sourceType ?? null, namedVolumes };
+}
+
+/**
+ * Delete only stack directories accepted by the existing deletion preview/guard.
+ * Callers can preserve files by simply not invoking this helper.
+ */
+export async function deleteManagedStackFiles(
+	stackName: string,
+	envId?: number | null
+): Promise<{ deleted: string[] }> {
+	const { stackDir, gitDir } = await computeStackDeletionPaths(stackName, envId);
+	const deleted: string[] = [];
+	for (const directory of [stackDir, gitDir]) {
+		if (!directory || !existsSync(directory)) continue;
+		rmSync(directory, { recursive: true, force: true });
+		deleted.push(directory);
+	}
+	return { deleted };
 }
 
 export async function removeStack(

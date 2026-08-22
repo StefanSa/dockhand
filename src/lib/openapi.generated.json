@@ -26060,6 +26060,295 @@
         }
       }
     },
+    "/api/swarm/stacks/{name}": {
+      "get": {
+        "operationId": "get_api_swarm_stacks_name",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Read Dockhand's stored Compose file for a Swarm stack",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm stack namespace"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "compose": {
+                      "type": "string"
+                    },
+                    "managed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "compose",
+                    "managed"
+                  ]
+                },
+                "example": {
+                  "compose": "string",
+                  "managed": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid environment ID"
+          },
+          "403": {
+            "description": "Permission or environment access denied"
+          },
+          "404": {
+            "description": "Stored Swarm stack file not found"
+          },
+          "502": {
+            "description": "Failed to read the stored Swarm stack file"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "put": {
+        "operationId": "put_api_swarm_stacks_name",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Deploy or update a Swarm stack from a Compose file",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm stack namespace"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "filesPreserved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "action",
+                    "name",
+                    "filesPreserved"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "action": "string",
+                  "name": "string",
+                  "filesPreserved": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid stack name or Compose file"
+          },
+          "403": {
+            "description": "Permission or environment access denied"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "409": {
+            "description": "Manager endpoint required, or name belongs to a Compose stack"
+          },
+          "500": {
+            "description": "Failed to persist the managed stack file"
+          },
+          "502": {
+            "description": "Docker stack validation/deploy failed"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "compose": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "compose"
+                ]
+              },
+              "example": {
+                "compose": "string"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "delete_api_swarm_stacks_name",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Remove a Swarm stack while preserving its stored file by default",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm stack namespace"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID"
+          },
+          {
+            "name": "files",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Also delete Dockhand-managed stack files (default false)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "filesPreserved": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "action",
+                    "name",
+                    "filesPreserved"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "action": "string",
+                  "name": "string",
+                  "filesPreserved": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid environment ID or stack name"
+          },
+          "403": {
+            "description": "Permission or environment access denied"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "409": {
+            "description": "Manager endpoint required, or name belongs to a Compose stack"
+          },
+          "500": {
+            "description": "Failed to clean up the managed stack source or files"
+          },
+          "502": {
+            "description": "Docker stack removal failed"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
     "/api/system": {
       "get": {
         "operationId": "get_api_system",

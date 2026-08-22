@@ -82,6 +82,13 @@ export interface SwarmServiceSummary {
 	updatedAt?: string;
 }
 
+export interface SwarmStackSummary {
+	name: string;
+	services: SwarmServiceSummary[];
+	runningTasks: number;
+	desiredTasks: number | null;
+}
+
 export interface SwarmClusterSummary {
 	id: string;
 	version: number;
@@ -119,6 +126,7 @@ export interface SwarmReadModel {
 	nodes: SwarmNodeSummary[];
 	services: SwarmServiceSummary[];
 	tasks: SwarmTaskSummary[];
+	stacks: SwarmStackSummary[];
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -333,6 +341,28 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 	};
 }
 
+export function mapSwarmStacks(services: SwarmServiceSummary[]): SwarmStackSummary[] {
+	const grouped = new Map<string, SwarmServiceSummary[]>();
+	for (const service of services) {
+		const namespace = service.labels['com.docker.stack.namespace'];
+		if (!namespace) continue;
+		const current = grouped.get(namespace) ?? [];
+		current.push(service);
+		grouped.set(namespace, current);
+	}
+
+	return [...grouped.entries()]
+		.map(([name, stackServices]) => ({
+			name,
+			services: stackServices.sort((a, b) => a.name.localeCompare(b.name)),
+			runningTasks: stackServices.reduce((total, service) => total + service.runningTasks, 0),
+			desiredTasks: stackServices.some((service) => service.desiredTasks === null)
+				? null
+				: stackServices.reduce((total, service) => total + (service.desiredTasks ?? 0), 0)
+		}))
+		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export function mapSwarmCluster(
 	value: unknown,
 	nodes: SwarmNodeSummary[],
@@ -393,7 +423,8 @@ export async function loadSwarmReadModel(
 			cluster: null,
 			nodes: [],
 			services: [],
-			tasks: []
+			tasks: [],
+			stacks: []
 		};
 	}
 
@@ -415,6 +446,7 @@ export async function loadSwarmReadModel(
 		cluster: mapSwarmCluster(clusterValue, nodes, services, tasks),
 		nodes,
 		services,
-		tasks
+		tasks,
+		stacks: mapSwarmStacks(services)
 	};
 }

@@ -2918,7 +2918,7 @@ export async function getAllAutoUpdateGitStacks(): Promise<GitStackWithRepo[]> {
 // STACK SOURCES OPERATIONS
 // =============================================================================
 
-export type StackSourceType = 'external' | 'internal' | 'git';
+export type StackSourceType = 'external' | 'internal' | 'git' | 'swarm';
 
 export interface StackSourceData {
 	id: number;

@@ -4,6 +4,7 @@ import {
 	mapSwarmCluster,
 	mapSwarmNode,
 	mapSwarmService,
+	mapSwarmStacks,
 	mapSwarmTask,
 	loadSwarmReadModel,
 	type SwarmCapability
@@ -117,6 +118,21 @@ describe('Swarm read-only response mapping', () => {
 			runningTasks: 1
 		});
 		assert.equal('joinTokens' in cluster, false);
+	});
+
+	it('discovers Swarm stacks from namespace labels and keeps their services grouped', () => {
+		const services = [
+			mapSwarmService({ ID: 'one', Spec: { Name: 'demo_web', Labels: { 'com.docker.stack.namespace': 'demo' }, Mode: { Replicated: { Replicas: 2 } } }, ServiceStatus: { RunningTasks: 2, DesiredTasks: 2 } }),
+			mapSwarmService({ ID: 'two', Spec: { Name: 'demo_worker', Labels: { 'com.docker.stack.namespace': 'demo' }, Mode: { Replicated: { Replicas: 1 } } }, ServiceStatus: { RunningTasks: 1, DesiredTasks: 1 } }),
+			mapSwarmService({ ID: 'loose', Spec: { Name: 'loose', Mode: { Replicated: { Replicas: 1 } } } })
+		];
+
+		const stacks = mapSwarmStacks(services);
+		assert.equal(stacks.length, 1);
+		assert.equal(stacks[0].name, 'demo');
+		assert.deepEqual(stacks[0].services.map((service) => service.name), ['demo_web', 'demo_worker']);
+		assert.equal(stacks[0].runningTasks, 3);
+		assert.equal(stacks[0].desiredTasks, 3);
 	});
 
 	it('does not call manager-only endpoints for a worker', async () => {

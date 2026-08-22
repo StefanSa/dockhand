@@ -40,7 +40,9 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 
 		// Add stacks from database that are internally managed but don't have containers yet
 		// (created with "Create" button, not "Create & Start")
-		const stackSources = await getStackSources(envIdNum);
+		// Swarm stack files share Dockhand's guarded stack storage, but are managed
+		// exclusively from /swarm and must never appear as Compose projects here.
+		const stackSources = (await getStackSources(envIdNum)).filter((source) => source.sourceType !== 'swarm');
 		const existingNames = new Set(stacks.map((s) => s.name));
 
 		// Enrich Docker-discovered stacks with source type from DB
