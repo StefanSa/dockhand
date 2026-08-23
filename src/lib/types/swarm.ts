@@ -67,9 +67,13 @@ export interface SwarmServiceSummary {
 	desiredTasks: number | null;
 	runningTasks: number;
 	completedTasks: number;
+	healthState: 'healthy' | 'converging' | 'degraded' | 'updating' | 'idle' | 'unknown';
 	labels: Record<string, string>;
+	stackName?: string;
 	constraints: string[];
 	preferences: unknown[];
+	configs: SwarmServiceResourceReference[];
+	secrets: SwarmServiceResourceReference[];
 	ports: Array<{
 		name?: string;
 		protocol?: string;
@@ -82,25 +86,39 @@ export interface SwarmServiceSummary {
 	updatedAt?: string;
 }
 
+export interface SwarmServiceResourceReference {
+	id: string;
+	name: string;
+	target?: string;
+}
+
 export interface SwarmResourceUsage {
 	serviceId: string;
 	serviceName: string;
+	stackName?: string;
 }
 
 export interface SwarmConfigSummary {
 	id: string;
+	version: number;
 	name: string;
+	labels: Record<string, string>;
+	data?: string;
 	createdAt?: string;
 	updatedAt?: string;
 	services: SwarmResourceUsage[];
+	stackNames: string[];
 }
 
 export interface SwarmSecretSummary {
 	id: string;
+	version: number;
 	name: string;
+	labels: Record<string, string>;
 	createdAt?: string;
 	updatedAt?: string;
 	services: SwarmResourceUsage[];
+	stackNames: string[];
 }
 
 export interface SwarmStackSummary {
@@ -296,6 +314,25 @@ export function mapSwarmTask(value: unknown): SwarmTaskSummary {
 	};
 }
 
+function mapServiceResourceReferences(
+	containerSpec: Record<string, unknown>,
+	kind: 'config' | 'secret'
+): SwarmServiceResourceReference[] {
+	const listKey = kind === 'config' ? 'Configs' : 'Secrets';
+	const idKey = kind === 'config' ? 'ConfigID' : 'SecretID';
+	const nameKey = kind === 'config' ? 'ConfigName' : 'SecretName';
+	const references = Array.isArray(containerSpec[listKey]) ? containerSpec[listKey] : [];
+
+	return references.flatMap((value: unknown) => {
+		if (!isRecord(value)) return [];
+		const id = stringValue(value[idKey]) ?? '';
+		const name = stringValue(value[nameKey]) ?? id;
+		if (!id && !name) return [];
+		const file = isRecord(value.File) ? value.File : {};
+		return [{ id, name, target: stringValue(file.Name) }];
+	});
+}
+
 export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []): SwarmServiceSummary {
 	const service = isRecord(value) ? value : {};
 	const spec = isRecord(service.Spec) ? service.Spec : {};
@@ -328,6 +365,15 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 		?? serviceTasks.filter((task) => task.state === 'running').length;
 	const completedTasks = numberValue(serviceStatus.CompletedTasks)
 		?? serviceTasks.filter((task) => task.state === 'complete').length;
+	const activeTasks = serviceTasks.filter((task) => task.desiredState !== 'shutdown');
+	const updateState = stringValue(updateStatus?.State);
+	let healthState: SwarmServiceSummary['healthState'] = 'unknown';
+	if (updateState === 'updating' || updateState === 'rollback_started') healthState = 'updating';
+	else if (desiredTasks === 0) healthState = 'idle';
+	else if (activeTasks.some((task) => ['failed', 'rejected', 'orphaned'].includes(task.state ?? ''))) healthState = 'degraded';
+	else if (desiredTasks !== null && runningTasks >= desiredTasks) healthState = 'healthy';
+	else if (desiredTasks !== null) healthState = 'converging';
+	const labels = stringRecord(spec.Labels);
 
 	return {
 		id,
@@ -338,11 +384,15 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 		desiredTasks,
 		runningTasks,
 		completedTasks,
-		labels: stringRecord(spec.Labels),
+		healthState,
+		labels,
+		stackName: labels['com.docker.stack.namespace'],
 		constraints: Array.isArray(placement.Constraints)
 			? placement.Constraints.filter((item: unknown): item is string => typeof item === 'string')
 			: [],
 		preferences: Array.isArray(placement.Preferences) ? placement.Preferences : [],
+		configs: mapServiceResourceReferences(containerSpec, 'config'),
+		secrets: mapServiceResourceReferences(containerSpec, 'secret'),
 		ports: (Array.isArray(endpointSpec.Ports) ? endpointSpec.Ports : Array.isArray(endpoint.Ports) ? endpoint.Ports : []).map((port: unknown) => {
 			const item = isRecord(port) ? port : {};
 			return {
@@ -384,11 +434,23 @@ function mapSwarmResourceUsage(
 		const serviceId = stringValue(service.ID) ?? '';
 		usage.push({
 			serviceId,
-			serviceName: stringValue(spec.Name) ?? serviceId
+			serviceName: stringValue(spec.Name) ?? serviceId,
+			stackName: stringRecord(spec.Labels)['com.docker.stack.namespace']
 		});
 	}
 
 	return usage.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
+}
+
+function decodeConfigData(value: unknown): string | undefined {
+	if (typeof value !== 'string') return undefined;
+	try {
+		const binary = atob(value);
+		const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+		return new TextDecoder().decode(bytes);
+	} catch {
+		return undefined;
+	}
 }
 
 function mapSwarmResource(
@@ -399,15 +461,21 @@ function mapSwarmResource(
 	const resource = isRecord(value) ? value : {};
 	const spec = isRecord(resource.Spec) ? resource.Spec : {};
 	const id = stringValue(resource.ID) ?? '';
-
-	// Intentionally map only metadata. In particular, never copy Spec.Data for secrets.
-	return {
+	const services = mapSwarmResourceUsage(serviceValues, id, kind);
+	const base = {
 		id,
+		version: versionIndex(resource.Version),
 		name: stringValue(spec.Name) ?? id,
+		labels: stringRecord(spec.Labels),
 		createdAt: stringValue(resource.CreatedAt),
 		updatedAt: stringValue(resource.UpdatedAt),
-		services: mapSwarmResourceUsage(serviceValues, id, kind)
+		services,
+		stackNames: [...new Set(services.flatMap((usage) => usage.stackName ? [usage.stackName] : []))].sort()
 	};
+
+	if (kind === 'config') return { ...base, data: decodeConfigData(spec.Data) };
+	// Secrets intentionally use an explicit allowlist. Never copy, decode, or retain Spec.Data.
+	return base;
 }
 
 export function mapSwarmConfig(value: unknown, serviceValues: unknown[] = []): SwarmConfigSummary {

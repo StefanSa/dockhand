@@ -67,9 +67,13 @@ describe('Swarm read-only response mapping', () => {
 			Version: { Index: 11 },
 			Spec: {
 				Name: 'web',
-				Labels: { team: 'platform' },
+				Labels: { team: 'platform', 'com.docker.stack.namespace': 'demo' },
 				TaskTemplate: {
-					ContainerSpec: { Image: 'nginx:1.29' },
+					ContainerSpec: {
+						Image: 'nginx:1.29',
+						Configs: [{ ConfigID: 'config-1', ConfigName: 'app-config', File: { Name: '/etc/app.conf' } }],
+						Secrets: [{ SecretID: 'secret-1', SecretName: 'db-password', File: { Name: 'db-password' } }]
+					},
 					Placement: { Constraints: ['node.labels.region==eu'], Preferences: [{ Spread: { SpreadDescriptor: 'node.labels.zone' } }] }
 				},
 				Mode: { Replicated: { Replicas: 3 } },
@@ -85,7 +89,11 @@ describe('Swarm read-only response mapping', () => {
 		assert.equal(service.mode, 'replicated');
 		assert.equal(service.desiredTasks, 3);
 		assert.equal(service.runningTasks, 2);
-		assert.deepEqual(service.labels, { team: 'platform' });
+		assert.deepEqual(service.labels, { team: 'platform', 'com.docker.stack.namespace': 'demo' });
+		assert.equal(service.stackName, 'demo');
+		assert.equal(service.healthState, 'converging');
+		assert.deepEqual(service.configs, [{ id: 'config-1', name: 'app-config', target: '/etc/app.conf' }]);
+		assert.deepEqual(service.secrets, [{ id: 'secret-1', name: 'db-password', target: 'db-password' }]);
 		assert.deepEqual(service.constraints, ['node.labels.region==eu']);
 		assert.deepEqual(service.ports[0], {
 			name: undefined,
@@ -142,6 +150,7 @@ describe('Swarm read-only response mapping', () => {
 			ID: 'service-1',
 			Spec: {
 				Name: 'demo_web',
+				Labels: { 'com.docker.stack.namespace': 'demo' },
 				TaskTemplate: { ContainerSpec: {
 					Configs: [{ ConfigID: 'config-1', ConfigName: 'app-config' }],
 					Secrets: [{ SecretID: 'secret-1', SecretName: 'db-password' }]
@@ -149,24 +158,25 @@ describe('Swarm read-only response mapping', () => {
 			}
 		}];
 		const config = mapSwarmConfig({
-			ID: 'config-1', CreatedAt: '2026-08-23T10:00:00Z', UpdatedAt: '2026-08-23T10:01:00Z',
-			Spec: { Name: 'app-config', Data: 'must-not-leak' }
+			ID: 'config-1', Version: { Index: 12 }, CreatedAt: '2026-08-23T10:00:00Z', UpdatedAt: '2026-08-23T10:01:00Z',
+			Spec: { Name: 'app-config', Labels: { team: 'platform' }, Data: Buffer.from('config contents').toString('base64') }
 		}, services);
 		const secret = mapSwarmSecret({
-			ID: 'secret-1', CreatedAt: '2026-08-23T11:00:00Z', UpdatedAt: '2026-08-23T11:01:00Z',
+			ID: 'secret-1', Version: { Index: 13 }, CreatedAt: '2026-08-23T11:00:00Z', UpdatedAt: '2026-08-23T11:01:00Z',
 			Spec: { Name: 'db-password', Data: 'c3VwZXItc2VjcmV0' }
 		}, services);
 
 		assert.deepEqual(config, {
-			id: 'config-1', name: 'app-config', createdAt: '2026-08-23T10:00:00Z', updatedAt: '2026-08-23T10:01:00Z',
-			services: [{ serviceId: 'service-1', serviceName: 'demo_web' }]
+			id: 'config-1', version: 12, name: 'app-config', labels: { team: 'platform' }, data: 'config contents', createdAt: '2026-08-23T10:00:00Z', updatedAt: '2026-08-23T10:01:00Z',
+			services: [{ serviceId: 'service-1', serviceName: 'demo_web', stackName: 'demo' }], stackNames: ['demo']
 		});
 		assert.deepEqual(secret, {
-			id: 'secret-1', name: 'db-password', createdAt: '2026-08-23T11:00:00Z', updatedAt: '2026-08-23T11:01:00Z',
-			services: [{ serviceId: 'service-1', serviceName: 'demo_web' }]
+			id: 'secret-1', version: 13, name: 'db-password', labels: {}, createdAt: '2026-08-23T11:00:00Z', updatedAt: '2026-08-23T11:01:00Z',
+			services: [{ serviceId: 'service-1', serviceName: 'demo_web', stackName: 'demo' }], stackNames: ['demo']
 		});
-		assert.equal(JSON.stringify({ config, secret }).includes('must-not-leak'), false);
+		assert.equal(config.data, 'config contents');
 		assert.equal(JSON.stringify(secret).includes('c3VwZXItc2VjcmV0'), false);
+		assert.equal(JSON.stringify(secret).includes('super-secret'), false);
 		assert.equal('data' in secret, false);
 	});
 

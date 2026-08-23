@@ -12,6 +12,12 @@ export interface SwarmResourceDeleteResult {
 	name?: string;
 }
 
+export interface SwarmResourceLabelUpdateResult {
+	id: string;
+	name: string;
+	labels: Record<string, string>;
+}
+
 export class SwarmResourceActionError extends Error {
 	constructor(message: string, public statusCode: number) {
 		super(message);
@@ -45,6 +51,19 @@ function validateName(name: unknown): string {
 	if (!normalized) throw new SwarmResourceActionError('Name is required', 400);
 	if (normalized.length > 255 || /[\0\r\n]/.test(normalized)) {
 		throw new SwarmResourceActionError('Name must be at most 255 characters and contain no line breaks', 400);
+	}
+	return normalized;
+}
+
+function validateLabels(labels: unknown): Record<string, string> {
+	if (!isRecord(labels)) throw new SwarmResourceActionError('Labels must be an object of string values', 400);
+	const normalized: Record<string, string> = {};
+	for (const [key, value] of Object.entries(labels)) {
+		const labelKey = key.trim();
+		if (!labelKey || /[\0\r\n=]/.test(labelKey) || typeof value !== 'string' || /[\0\r\n]/.test(value)) {
+			throw new SwarmResourceActionError('Labels must use non-empty keys and single-line string values', 400);
+		}
+		normalized[labelKey] = value;
 	}
 	return normalized;
 }
@@ -114,4 +133,39 @@ export async function performSwarmResourceDelete(
 
 	await request(`/${resourcePath(kind)}/${encodeURIComponent(resourceId)}`, { method: 'DELETE' });
 	return { id: resourceId };
+}
+
+export async function performSwarmResourceLabelUpdate(
+	capability: SwarmCapability,
+	kind: SwarmResourceKind,
+	resourceId: string,
+	labels: unknown,
+	request: SwarmResourceRequest
+): Promise<SwarmResourceLabelUpdateResult> {
+	assertManager(capability);
+	if (!resourceId) throw new SwarmResourceActionError(`${resourceLabel(kind)} ID is required`, 400);
+	const normalizedLabels = validateLabels(labels);
+	const encodedId = encodeURIComponent(resourceId);
+	const inspected = await request(`/${resourcePath(kind)}/${encodedId}`);
+	if (!isRecord(inspected)) throw new SwarmResourceActionError(`Docker did not return ${resourceLabel(kind)} metadata`, 502);
+	const version = isRecord(inspected.Version) && typeof inspected.Version.Index === 'number'
+		? inspected.Version.Index
+		: null;
+	const spec = isRecord(inspected.Spec) ? inspected.Spec : {};
+	const name = typeof spec.Name === 'string' ? spec.Name : resourceId;
+	if (version === null) throw new SwarmResourceActionError(`Docker did not return a ${resourceLabel(kind)} version`, 502);
+
+	const updateSpec: Record<string, unknown> = { Name: name, Labels: normalizedLabels };
+	if (isRecord(spec.Driver)) updateSpec.Driver = spec.Driver;
+	if (isRecord(spec.Templating)) updateSpec.Templating = spec.Templating;
+	// Docker permits only label changes. Config data must be sent back unchanged;
+	// secret data is never returned by inspect and is never added to this request.
+	if (kind === 'config' && typeof spec.Data === 'string') updateSpec.Data = spec.Data;
+
+	await request(`/${resourcePath(kind)}/${encodedId}/update?version=${version}`, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify(updateSpec)
+	});
+	return { id: resourceId, name, labels: normalizedLabels };
 }

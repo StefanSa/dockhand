@@ -4,7 +4,8 @@ import {
 	SwarmResourceActionError,
 	findSwarmResourceUsage,
 	performSwarmResourceCreate,
-	performSwarmResourceDelete
+	performSwarmResourceDelete,
+	performSwarmResourceLabelUpdate
 } from '../src/lib/server/swarm-resource';
 import type { SwarmCapability } from '../src/lib/types/swarm';
 
@@ -103,5 +104,54 @@ describe('Swarm Config and Secret actions', () => {
 		const services = [{ ID: 'one', Spec: { Name: 'web', TaskTemplate: { ContainerSpec: { Secrets: [{ SecretID: 'target' }] } } } }];
 		assert.deepEqual(findSwarmResourceUsage(services, 'secret', 'target'), ['web']);
 		assert.deepEqual(findSwarmResourceUsage(services, 'config', 'target'), []);
+	});
+
+	it('updates Config labels while sending the immutable data back unchanged', async () => {
+		const calls: Array<{ path: string; body?: string }> = [];
+		const result = await performSwarmResourceLabelUpdate(manager, 'config', 'config-id', { team: 'platform' }, async (path, options) => {
+			calls.push({ path, body: options?.body?.toString() });
+			if (!options?.method) return {
+				ID: 'config-id', Version: { Index: 17 },
+				Spec: { Name: 'app-config', Labels: { old: 'value' }, Data: 'Y29uZmlnLWRhdGE=' }
+			};
+		});
+
+		assert.deepEqual(result, { id: 'config-id', name: 'app-config', labels: { team: 'platform' } });
+		assert.deepEqual(calls.map((call) => call.path), ['/configs/config-id', '/configs/config-id/update?version=17']);
+		assert.deepEqual(JSON.parse(calls[1].body ?? '{}'), {
+			Name: 'app-config', Labels: { team: 'platform' }, Data: 'Y29uZmlnLWRhdGE='
+		});
+	});
+
+	it('updates Secret labels without returning or resending any Secret data', async () => {
+		const rawSecret = 'never-return-this-secret';
+		let updateBody = '';
+		const result = await performSwarmResourceLabelUpdate(manager, 'secret', 'secret-id', { owner: 'database' }, async (path, options) => {
+			if (!options?.method) return {
+				ID: 'secret-id', Version: { Index: 21 },
+				Spec: { Name: 'db-password', Labels: {}, Data: Buffer.from(rawSecret).toString('base64') }
+			};
+			assert.equal(path, '/secrets/secret-id/update?version=21');
+			updateBody = String(options.body);
+		});
+
+		assert.deepEqual(result, { id: 'secret-id', name: 'db-password', labels: { owner: 'database' } });
+		assert.equal(updateBody.includes(rawSecret), false);
+		assert.equal(updateBody.includes(Buffer.from(rawSecret).toString('base64')), false);
+		assert.equal('Data' in JSON.parse(updateBody), false);
+		assert.equal(JSON.stringify(result).includes(rawSecret), false);
+	});
+
+	it('rejects invalid labels and non-manager label updates before Docker requests', async () => {
+		let requests = 0;
+		await assert.rejects(
+			performSwarmResourceLabelUpdate(manager, 'config', 'config-id', { 'bad=key': 'value' }, async () => { requests++; }),
+			(error: unknown) => error instanceof SwarmResourceActionError && error.statusCode === 400
+		);
+		await assert.rejects(
+			performSwarmResourceLabelUpdate({ ...manager, kind: 'swarm-worker', controlAvailable: false }, 'secret', 'secret-id', {}, async () => { requests++; }),
+			(error: unknown) => error instanceof SwarmResourceActionError && error.statusCode === 409
+		);
+		assert.equal(requests, 0);
 	});
 });

@@ -26280,6 +26280,115 @@
             "bearerAuth": []
           }
         ]
+      },
+      "patch": {
+        "operationId": "patch_api_swarm_configs_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Update only the labels of an immutable Swarm config",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm config ID (from GET /api/swarm/configs)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id",
+                    "name",
+                    "labels"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string",
+                  "name": "string",
+                  "labels": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid config, environment ID, or labels"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or config not found"
+          },
+          "409": {
+            "description": "Manager endpoint required or concurrent Docker update"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm config update"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "labels": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "labels"
+                ]
+              },
+              "example": {
+                "labels": "string"
+              }
+            }
+          }
+        }
       }
     },
     "/api/swarm/nodes/{id}": {
@@ -26664,6 +26773,115 @@
             "bearerAuth": []
           }
         ]
+      },
+      "patch": {
+        "operationId": "patch_api_swarm_secrets_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Update only the labels of a Swarm secret without reading its value",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm secret ID (from GET /api/swarm/secrets)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "labels": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id",
+                    "name",
+                    "labels"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string",
+                  "name": "string",
+                  "labels": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid secret, environment ID, or labels"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or secret not found"
+          },
+          "409": {
+            "description": "Manager endpoint required or concurrent Docker update"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm secret metadata update"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "labels": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "labels"
+                ]
+              },
+              "example": {
+                "labels": "string"
+              }
+            }
+          }
+        }
       }
     },
     "/api/swarm/services/{id}": {

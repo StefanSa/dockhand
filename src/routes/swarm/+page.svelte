@@ -4,8 +4,9 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound, ChevronRight, Copy, Check } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -26,8 +27,12 @@
 	import { currentEnvironment } from '$lib/stores/environment';
 	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
+	import { copyToClipboard } from '$lib/utils/clipboard';
 	import type { SwarmConfigSummary, SwarmNodeSummary, SwarmReadModel, SwarmSecretSummary, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
 	import { filterSwarmTasks, isFailedSwarmTask, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
+	import { isSwarmDetailAvailable, parseSwarmDetail, swarmDetailHref, swarmTabHref, SWARM_TABS, type SwarmDetailKind, type SwarmTab } from '$lib/swarm-navigation';
+	import { planSwarmConfigReplacement } from '$lib/swarm-config-replacement';
+	import { servicesForSwarmNode, tasksForSwarmNode, tasksForSwarmService } from '$lib/swarm-relations';
 
 	type NodeDialogAction =
 		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
@@ -75,6 +80,16 @@
 	let resourceError = $state<string | null>(null);
 	let deleteResourceDialogOpen = $state(false);
 	let deleteResource = $state<SwarmResourceSummary | null>(null);
+	let metadataDialogOpen = $state(false);
+	let metadataResource = $state<SwarmResourceSummary | null>(null);
+	let metadataKind = $state<SwarmResourceKind>('config');
+	let metadataLabels = $state('');
+	let replaceConfigDialogOpen = $state(false);
+	let replaceConfigSource = $state<SwarmConfigSummary | null>(null);
+	let replacementName = $state('');
+	let replacementValue = $state('');
+	let replacementConfirmed = $state(false);
+	let copiedConfigId = $state<string | null>(null);
 	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
 	const visibleTasks = $derived(filterSwarmTasks(
 		data?.tasks ?? [],
@@ -83,10 +98,27 @@
 		data?.services ?? [],
 		data?.nodes ?? []
 	));
+	const detail = $derived(parseSwarmDetail($page.url.searchParams));
+	const selectedNode = $derived(detail?.kind === 'node' ? data?.nodes.find((node) => node.id === detail.id) ?? null : null);
+	const selectedService = $derived(detail?.kind === 'service' ? data?.services.find((service) => service.id === detail.id) ?? null : null);
+	const selectedTask = $derived(detail?.kind === 'task' ? data?.tasks.find((task) => task.id === detail.id) ?? null : null);
+	const selectedStack = $derived(detail?.kind === 'stack' ? data?.stacks.find((stack) => stack.name === detail.id) ?? null : null);
+	const selectedConfig = $derived(detail?.kind === 'config' ? data?.configs.find((config) => config.id === detail.id) ?? null : null);
+	const selectedSecret = $derived(detail?.kind === 'secret' ? data?.secrets.find((secret) => secret.id === detail.id) ?? null : null);
+	const selectedTaskService = $derived(selectedTask?.serviceId ? data?.services.find((service) => service.id === selectedTask.serviceId) ?? null : null);
+	const selectedTaskNode = $derived(selectedTask?.nodeId ? data?.nodes.find((node) => node.id === selectedTask.nodeId) ?? null : null);
+	const selectedServiceTasks = $derived(selectedService && data ? tasksForSwarmService(data.tasks, selectedService.id) : []);
+	const selectedNodeTasks = $derived(selectedNode && data ? tasksForSwarmNode(data.tasks, selectedNode.id) : []);
+	const selectedNodeServices = $derived.by(() => {
+		if (!selectedNode || !data) return [];
+		return servicesForSwarmNode(data.services, data.tasks, selectedNode);
+	});
 
 	$effect(() => {
 		const requestedTab = $page.url.searchParams.get('tab');
-		if (requestedTab && ['overview', 'nodes', 'services', 'stacks', 'tasks', 'configs', 'secrets'].includes(requestedTab)) {
+		if (detail) {
+			activeTab = detail.tab;
+		} else if (requestedTab && SWARM_TABS.includes(requestedTab as SwarmTab)) {
 			activeTab = requestedTab;
 		}
 	});
@@ -140,12 +172,160 @@
 		return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 	}
 
+	function formatPort(port: SwarmServiceSummary['ports'][number]): string {
+		const published = port.publishedPort ? `${port.publishedPort}:` : '';
+		return `${published}${port.targetPort ?? '—'}/${port.protocol ?? 'tcp'}${port.publishMode ? ` (${port.publishMode})` : ''}`;
+	}
+
+	function healthVariant(health: SwarmServiceSummary['healthState']): 'secondary' | 'destructive' | 'outline' {
+		return health === 'healthy' ? 'secondary' : health === 'degraded' ? 'destructive' : 'outline';
+	}
+
+	function detailHref(kind: SwarmDetailKind, id: string): string {
+		return swarmDetailHref(kind, id);
+	}
+
+	function navigateToTab(value: string): void {
+		if (!SWARM_TABS.includes(value as SwarmTab)) return;
+		activeTab = value;
+		void goto(swarmTabHref(value as SwarmTab), { noScroll: true, keepFocus: true });
+	}
+
+	function labelsAsText(labels: Record<string, string>): string {
+		return Object.entries(labels).sort(([left], [right]) => left.localeCompare(right)).map(([key, value]) => `${key}=${value}`).join('\n');
+	}
+
+	function parseLabels(value: string): Record<string, string> {
+		const labels: Record<string, string> = {};
+		for (const [index, rawLine] of value.split('\n').entries()) {
+			const line = rawLine.trim();
+			if (!line) continue;
+			const separator = line.indexOf('=');
+			if (separator <= 0) throw new Error(`Label line ${index + 1} must use key=value.`);
+			const key = line.slice(0, separator).trim();
+			if (!key || key in labels) throw new Error(`Label key on line ${index + 1} is empty or duplicated.`);
+			labels[key] = line.slice(separator + 1);
+		}
+		return labels;
+	}
+
+	async function copyConfigData(config: SwarmConfigSummary): Promise<void> {
+		if (config.data === undefined) return;
+		if (!await copyToClipboard(config.data)) {
+			toast.error('Copy requires clipboard access.');
+			return;
+		}
+		copiedConfigId = config.id;
+		toast.success(`Config ${config.name} copied`);
+		setTimeout(() => { if (copiedConfigId === config.id) copiedConfigId = null; }, 1500);
+	}
+
 	function resourceLabel(kind: SwarmResourceKind): string {
 		return kind === 'config' ? 'Config' : 'Secret';
 	}
 
 	function resourceApiPath(kind: SwarmResourceKind): string {
 		return kind === 'config' ? 'configs' : 'secrets';
+	}
+
+	function openMetadataDialog(kind: SwarmResourceKind, resource: SwarmResourceSummary): void {
+		metadataKind = kind;
+		metadataResource = resource;
+		metadataLabels = labelsAsText(resource.labels);
+		resourceError = null;
+		metadataDialogOpen = true;
+	}
+
+	function closeMetadataDialog(): void {
+		if (resourcePending) return;
+		metadataDialogOpen = false;
+		metadataResource = null;
+		metadataLabels = '';
+		resourceError = null;
+	}
+
+	async function updateResourceMetadata(): Promise<void> {
+		if (!environmentId || !metadataResource || resourcePending) return;
+		let labels: Record<string, string>;
+		try {
+			labels = parseLabels(metadataLabels);
+		} catch (labelError) {
+			resourceError = labelError instanceof Error ? labelError.message : 'Invalid labels';
+			return;
+		}
+		resourcePending = true;
+		resourceError = null;
+		try {
+			const response = await fetch(`/api/swarm/${resourceApiPath(metadataKind)}/${encodeURIComponent(metadataResource.id)}?env=${environmentId}`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ labels })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || `Failed to update ${metadataKind} labels`);
+			const name = metadataResource.name;
+			metadataDialogOpen = false;
+			metadataResource = null;
+			toast.success(`${resourceLabel(metadataKind)} ${name} labels updated`);
+			await load(true);
+		} catch (updateFailure) {
+			resourceError = updateFailure instanceof Error ? updateFailure.message : `Failed to update ${metadataKind} labels`;
+			toast.error(resourceError);
+		} finally {
+			resourcePending = false;
+		}
+	}
+
+	function openReplaceConfigDialog(config: SwarmConfigSummary): void {
+		replaceConfigSource = config;
+		replacementName = `${config.name}-v2`;
+		replacementValue = config.data ?? '';
+		replacementConfirmed = false;
+		resourceError = null;
+		replaceConfigDialogOpen = true;
+	}
+
+	function closeReplaceConfigDialog(): void {
+		if (resourcePending) return;
+		replaceConfigDialogOpen = false;
+		replaceConfigSource = null;
+		replacementName = '';
+		replacementValue = '';
+		replacementConfirmed = false;
+		resourceError = null;
+	}
+
+	async function createConfigReplacement(): Promise<void> {
+		if (!environmentId || !replaceConfigSource || resourcePending || !replacementConfirmed || !replacementName.trim()) return;
+		let plan;
+		try {
+			plan = planSwarmConfigReplacement(replaceConfigSource, replacementName, replacementValue, replacementConfirmed);
+		} catch (planError) {
+			resourceError = planError instanceof Error ? planError.message : 'Invalid replacement Config';
+			return;
+		}
+		resourcePending = true;
+		resourceError = null;
+		try {
+			const response = await fetch(`/api/swarm/configs?env=${environmentId}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: plan.name, value: plan.value })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || 'Failed to create replacement Config');
+			replaceConfigDialogOpen = false;
+			replaceConfigSource = null;
+			replacementValue = '';
+			toast.success(`Replacement Config ${body.name} created; existing references were left unchanged`);
+			await load(true);
+			await goto(detailHref('config', body.id), { noScroll: true });
+		} catch (replaceFailure) {
+			resourceError = replaceFailure instanceof Error ? replaceFailure.message : 'Failed to create replacement Config';
+			toast.error(resourceError);
+		} finally {
+			resourcePending = false;
+		}
 	}
 
 	function openCreateResourceDialog(kind: SwarmResourceKind): void {
@@ -185,7 +365,7 @@
 			resourceName = '';
 			toast.success(`${resourceLabel(submittedKind)} ${body.name} created`);
 			await load(true);
-			activeTab = resourceApiPath(submittedKind);
+			await goto(detailHref(submittedKind, body.id), { noScroll: true });
 		} catch (createFailure) {
 			resourceError = createFailure instanceof Error ? createFailure.message : `Failed to create Swarm ${submittedKind}`;
 			toast.error(resourceError);
@@ -215,6 +395,7 @@
 			deleteResource = null;
 			toast.success(`${resourceLabel(kind)} ${resource.name} deleted`);
 			await load(true);
+			await goto(swarmTabHref(resourceApiPath(kind) as SwarmTab), { noScroll: true });
 		} catch (deleteFailure) {
 			resourceError = deleteFailure instanceof Error ? deleteFailure.message : `Failed to delete Swarm ${kind}`;
 			toast.error(resourceError);
@@ -442,6 +623,7 @@
 		const unsubscribe = currentEnvironment.subscribe((environment) => {
 			const nextId = environment?.id ?? null;
 			if (nextId === environmentId) return;
+			const previousId = environmentId;
 			environmentId = nextId;
 			data = null;
 			error = null;
@@ -449,10 +631,15 @@
 			closeNodeActionDialog();
 			closeStackDialog();
 			closeResourceDialog();
+			closeMetadataDialog();
+			closeReplaceConfigDialog();
 			removeStackDialogOpen = false;
 			deleteResourceDialogOpen = false;
 			deleteResource = null;
 			requestSequence++;
+			if (previousId !== null && parseSwarmDetail($page.url.searchParams)) {
+				void goto(swarmTabHref(activeTab as SwarmTab), { replaceState: true, noScroll: true, keepFocus: true });
+			}
 			if (nextId) void load(true);
 		});
 		const interval = setInterval(() => {
@@ -545,7 +732,7 @@
 			</Alert.Root>
 		{/if}
 
-		<Tabs.Root value={activeTab} onValueChange={(value) => activeTab = value} class="flex min-h-0 flex-1 flex-col gap-3">
+		<Tabs.Root value={activeTab} onValueChange={navigateToTab} class="flex min-h-0 flex-1 flex-col gap-3">
 			<Tabs.List class="w-fit">
 				<Tabs.Trigger value="overview">Overview</Tabs.Trigger>
 				<Tabs.Trigger value="nodes">Nodes ({data.nodes.length})</Tabs.Trigger>
@@ -555,6 +742,83 @@
 				<Tabs.Trigger value="configs">Configs ({data.configs.length})</Tabs.Trigger>
 				<Tabs.Trigger value="secrets">Secrets ({data.secrets.length})</Tabs.Trigger>
 			</Tabs.List>
+
+			{#if detail}
+				<nav class="flex items-center gap-1 text-sm text-muted-foreground" aria-label="Swarm resource breadcrumb">
+					<a class="hover:text-foreground hover:underline" href={swarmTabHref(detail.tab)}>{detail.tab === 'stacks' ? 'Swarm Stacks' : detail.tab.charAt(0).toUpperCase() + detail.tab.slice(1)}</a>
+					<ChevronRight class="h-4 w-4" />
+					<span class="max-w-[32rem] truncate text-foreground">
+						{selectedNode?.hostname ?? selectedService?.name ?? selectedTask?.name ?? selectedStack?.name ?? selectedConfig?.name ?? selectedSecret?.name ?? detail.id}
+					</span>
+				</nav>
+
+				{#if data && !isSwarmDetailAvailable(data, detail)}
+					<Alert.Root>
+						<TriangleAlert class="h-4 w-4" />
+						<Alert.Title>Resource not found in this environment</Alert.Title>
+						<Alert.Description>The deep link does not match the currently selected Docker environment. <a class="font-medium underline" href={swarmTabHref(detail.tab)}>Return to the resource list.</a></Alert.Description>
+					</Alert.Root>
+				{:else if selectedService}
+					<Card.Root>
+						<Card.Header class="gap-1">
+							<div class="flex flex-wrap items-start justify-between gap-3">
+								<div><Card.Title>{selectedService.name}</Card.Title><Card.Description class="font-mono break-all">{selectedService.id}</Card.Description></div>
+								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+									<div class="flex gap-2">
+										{#if selectedService.mode === 'replicated'}<Button size="sm" variant="outline" onclick={() => openScaleDialog(selectedService)}><SlidersHorizontal class="h-4 w-4" /> Scale</Button>{/if}
+										{#if selectedService.mode === 'replicated' || selectedService.mode === 'global'}<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>{/if}
+									</div>
+								{/if}
+							</div>
+						</Card.Header>
+						<Card.Content class="space-y-5">
+							<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+								<div><span class="text-muted-foreground">Image</span><p class="break-all font-mono text-xs">{selectedService.image ?? '—'}</p></div>
+								<div><span class="text-muted-foreground">Mode / replicas</span><p class="capitalize">{selectedService.mode.replace('-', ' ')} · {selectedService.runningTasks} / {selectedService.desiredTasks ?? '—'}</p></div>
+								<div><span class="text-muted-foreground">Health</span><p><Badge variant={healthVariant(selectedService.healthState)} class="capitalize">{selectedService.healthState}</Badge></p></div>
+								<div><span class="text-muted-foreground">Update state</span><p class="capitalize">{selectedService.updateStatus?.state ?? 'No active update'}</p>{#if selectedService.updateStatus?.message}<p class="text-xs text-muted-foreground">{selectedService.updateStatus.message}</p>{/if}</div>
+								<div><span class="text-muted-foreground">Ports</span><p>{selectedService.ports.map(formatPort).join(', ') || 'None published'}</p></div>
+								<div><span class="text-muted-foreground">Placement</span><p>{selectedService.constraints.join(', ') || 'No constraints'}</p>{#if selectedService.preferences.length}<p class="text-xs text-muted-foreground">{selectedService.preferences.length} preference(s)</p>{/if}</div>
+								<div><span class="text-muted-foreground">Stack</span><p>{#if selectedService.stackName}<a class="font-medium text-primary hover:underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a>{:else}Standalone service{/if}</p></div>
+								<div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedService.updatedAt)}</p></div>
+							</div>
+							<div class="grid gap-4 lg:grid-cols-3">
+								<div><h3 class="mb-2 text-sm font-medium">Tasks ({selectedServiceTasks.length})</h3><div class="flex flex-wrap gap-1">{#each selectedServiceTasks as task (task.id)}<a href={detailHref('task', task.id)}><Badge variant={taskStateVariant(task)}>{task.slot ?? task.id.slice(0, 8)} · {task.state ?? 'unknown'}</Badge></a>{:else}<span class="text-sm text-muted-foreground">No tasks</span>{/each}</div></div>
+								<div><h3 class="mb-2 text-sm font-medium">Configs ({selectedService.configs.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.configs as config (config.id)}<a href={detailHref('config', config.id)}><Badge variant="outline">{config.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
+								<div><h3 class="mb-2 text-sm font-medium">Secrets ({selectedService.secrets.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.secrets as secret (secret.id)}<a href={detailHref('secret', secret.id)}><Badge variant="outline">{secret.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
+							</div>
+						</Card.Content>
+					</Card.Root>
+				{:else if selectedTask}
+					<Card.Root><Card.Header><Card.Title>{selectedTask.name ?? `Task ${selectedTask.id.slice(0, 12)}`}</Card.Title><Card.Description class="font-mono break-all">{selectedTask.id}</Card.Description></Card.Header><Card.Content class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
+						<div><span class="text-muted-foreground">Status</span><p><Badge variant={taskStateVariant(selectedTask)} class="capitalize">{selectedTask.state ?? 'unknown'}</Badge></p>{#if selectedTask.error || selectedTask.message}<p class="mt-1 text-xs {selectedTask.error ? 'text-destructive' : 'text-muted-foreground'}">{selectedTask.error || selectedTask.message}</p>{/if}</div>
+						<div><span class="text-muted-foreground">Desired state</span><p class="capitalize">{selectedTask.desiredState ?? '—'}</p></div>
+						<div><span class="text-muted-foreground">Service</span><p>{#if selectedTaskService}<a class="font-medium text-primary hover:underline" href={detailHref('service', selectedTaskService.id)}>{selectedTaskService.name}</a>{:else}{serviceName(selectedTask.serviceId)}{/if}</p></div>
+						<div><span class="text-muted-foreground">Node</span><p>{#if selectedTaskNode}<a class="font-medium text-primary hover:underline" href={detailHref('node', selectedTaskNode.id)}>{selectedTaskNode.hostname}</a>{:else}{nodeName(selectedTask.nodeId)}{/if}</p></div>
+						<div><span class="text-muted-foreground">Slot</span><p>{selectedTask.slot ?? '—'}</p></div><div class="sm:col-span-2"><span class="text-muted-foreground">Image</span><p class="break-all font-mono text-xs">{selectedTask.image ?? '—'}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedTask.statusTimestamp ?? selectedTask.updatedAt)}</p></div>
+					</Card.Content></Card.Root>
+				{:else if selectedNode}
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedNode.hostname}</Card.Title><Card.Description class="font-mono break-all">{selectedNode.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-1"><Button size="sm" variant="outline" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'active' })}>Active</Button><Button size="sm" variant="outline" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'pause' })}>Pause</Button><Button size="sm" variant="destructive" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'drain' })}>Drain</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
+						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Role</span><p class="capitalize">{selectedNode.role}</p></div><div><span class="text-muted-foreground">Availability</span><p class="capitalize">{selectedNode.availability}</p></div><div><span class="text-muted-foreground">Status</span><p class="capitalize">{selectedNode.status}</p></div><div><span class="text-muted-foreground">Address</span><p>{selectedNode.address ?? '—'}</p></div><div><span class="text-muted-foreground">Engine</span><p>{selectedNode.engineVersion ?? '—'}</p></div><div><span class="text-muted-foreground">Platform</span><p>{selectedNode.platform?.os ?? '—'} / {selectedNode.platform?.architecture ?? '—'}</p></div><div><span class="text-muted-foreground">Resources</span><p>{formatCpu(selectedNode.resources?.nanoCpus)} · {formatBytes(selectedNode.resources?.memoryBytes)}</p></div><div><span class="text-muted-foreground">Tasks</span><p>{selectedNodeTasks.length}</p></div></div>
+						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Services on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeServices as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant="outline">{service.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Tasks on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeTasks as task (task.id)}<a href={detailHref('task', task.id)}><Badge variant={taskStateVariant(task)}>{serviceName(task.serviceId)} · {task.slot ?? task.id.slice(0, 8)}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div></div>
+						{#if Object.keys(selectedNode.labels).length}<div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedNode.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{/each}</div></div>{/if}
+					</Card.Content></Card.Root>
+				{:else if selectedStack}
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedStack.name}</Card.Title><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={healthVariant(service.healthState)}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
+				{:else if selectedConfig}
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedConfig.name}</Card.Title><Card.Description class="font-mono break-all">{selectedConfig.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('config', selectedConfig)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="outline" onclick={() => openReplaceConfigDialog(selectedConfig)}><Plus class="h-4 w-4" /> Create replacement</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('config', selectedConfig)} disabled={selectedConfig.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
+						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Created</span><p>{formatDate(selectedConfig.createdAt)}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedConfig.updatedAt)}</p></div><div><span class="text-muted-foreground">Version</span><p>{selectedConfig.version}</p></div><div><span class="text-muted-foreground">Stacks</span><p>{#each selectedConfig.stackNames as stack, index (stack)}{#if index}, {/if}<a class="font-medium text-primary hover:underline" href={detailHref('stack', stack)}>{stack}</a>{:else}None derived{/each}</p></div></div>
+						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedConfig.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{:else}<span class="text-sm text-muted-foreground">No labels</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Used by Services</h3><div class="flex flex-wrap gap-1">{#each selectedConfig.services as usage (usage.serviceId)}<a href={detailHref('service', usage.serviceId)}><Badge variant="outline">{usage.serviceName}</Badge></a>{:else}<span class="text-sm text-muted-foreground">Unused</span>{/each}</div></div></div>
+						<div><div class="mb-2 flex items-center justify-between gap-2"><div><h3 class="text-sm font-medium">Config data</h3><p class="text-xs text-muted-foreground">Immutable. Use Create replacement to change content safely.</p></div><Button size="sm" variant="outline" onclick={() => copyConfigData(selectedConfig)} disabled={selectedConfig.data === undefined}>{#if copiedConfigId === selectedConfig.id}<Check class="h-4 w-4" /> Copied{:else}<Copy class="h-4 w-4" /> Copy{/if}</Button></div>{#if selectedConfig.data !== undefined}<pre class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs">{selectedConfig.data}</pre>{:else}<Alert.Root><TriangleAlert class="h-4 w-4" /><Alert.Description>Config data was not returned by this manager endpoint.</Alert.Description></Alert.Root>{/if}</div>
+					</Card.Content></Card.Root>
+				{:else if selectedSecret}
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedSecret.name}</Card.Title><Card.Description class="font-mono break-all">{selectedSecret.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('secret', selectedSecret)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('secret', selectedSecret)} disabled={selectedSecret.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
+						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Created</span><p>{formatDate(selectedSecret.createdAt)}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedSecret.updatedAt)}</p></div><div><span class="text-muted-foreground">Version</span><p>{selectedSecret.version}</p></div><div><span class="text-muted-foreground">Stacks</span><p>{#each selectedSecret.stackNames as stack, index (stack)}{#if index}, {/if}<a class="font-medium text-primary hover:underline" href={detailHref('stack', stack)}>{stack}</a>{:else}None derived{/each}</p></div></div>
+						<Alert.Root><ShieldAlert class="h-4 w-4" /><Alert.Title>Secret value is never available</Alert.Title><Alert.Description>Docker does not return secret data after creation, and Dockhand neither requests nor reconstructs it.</Alert.Description></Alert.Root>
+						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedSecret.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{:else}<span class="text-sm text-muted-foreground">No labels</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Used by Services</h3><div class="flex flex-wrap gap-1">{#each selectedSecret.services as usage (usage.serviceId)}<a href={detailHref('service', usage.serviceId)}><Badge variant="outline">{usage.serviceName}</Badge></a>{:else}<span class="text-sm text-muted-foreground">Unused</span>{/each}</div></div></div>
+					</Card.Content></Card.Root>
+				{/if}
+			{/if}
 
 			<Tabs.Content value="overview" class="space-y-4 overflow-auto">
 				<div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -582,7 +846,7 @@
 					<Table.Body>
 						{#each data.nodes as node (node.id)}
 							<Table.Row>
-								<Table.Cell><div class="font-medium">{node.hostname}</div><div class="text-xs text-muted-foreground font-mono">{node.address ?? node.id.slice(0, 12)}</div></Table.Cell>
+								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('node', node.id)}>{node.hostname}</a><div class="text-xs text-muted-foreground font-mono">{node.address ?? node.id.slice(0, 12)}</div></Table.Cell>
 								<Table.Cell><Badge variant={node.role === 'manager' ? 'secondary' : 'outline'} class="capitalize">{node.role}</Badge></Table.Cell>
 								<Table.Cell><Badge variant={node.availability === 'active' ? 'secondary' : node.availability === 'drain' ? 'destructive' : 'outline'} class="capitalize">{node.availability}</Badge></Table.Cell>
 								<Table.Cell><Badge variant={node.status === 'ready' ? 'secondary' : 'destructive'} class="capitalize">{node.status}</Badge></Table.Cell>
@@ -609,16 +873,16 @@
 
 			<Tabs.Content value="services" class="min-h-0 overflow-auto rounded-md border">
 				<Table.Root>
-					<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>Image</Table.Head><Table.Head>Mode</Table.Head><Table.Head>Tasks</Table.Head><Table.Head>Update state</Table.Head><Table.Head>Placement</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
+					<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>Image</Table.Head><Table.Head>Mode</Table.Head><Table.Head>Replicas</Table.Head><Table.Head>Health / update</Table.Head><Table.Head>Placement</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
 					<Table.Body>
 						{#each data.services as service (service.id)}
 							<Table.Row>
-								<Table.Cell><div class="font-medium">{service.name}</div><div class="text-xs text-muted-foreground font-mono">{service.id.slice(0, 12)}</div></Table.Cell>
+								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('service', service.id)}>{service.name}</a><div class="text-xs text-muted-foreground font-mono">{service.id.slice(0, 12)}</div>{#if service.stackName}<a class="text-xs text-muted-foreground hover:text-foreground hover:underline" href={detailHref('stack', service.stackName)}>{service.stackName}</a>{/if}</Table.Cell>
 								<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={service.image}>{service.image ?? '—'}</Table.Cell>
 								<Table.Cell class="capitalize">{service.mode.replace('-', ' ')}</Table.Cell>
 								<Table.Cell>{service.runningTasks} / {service.desiredTasks ?? '—'}{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} complete</div>{/if}</Table.Cell>
-								<Table.Cell class="capitalize">{service.updateStatus?.state ?? '—'}</Table.Cell>
-								<Table.Cell class="max-w-[22rem] text-xs">{service.constraints.join(', ') || 'No constraints'}</Table.Cell>
+								<Table.Cell><Badge variant={healthVariant(service.healthState)} class="capitalize">{service.healthState}</Badge>{#if service.updateStatus?.state}<div class="mt-1 text-xs capitalize text-muted-foreground">{service.updateStatus.state}</div>{/if}</Table.Cell>
+								<Table.Cell class="max-w-[22rem] text-xs">{service.constraints.join(', ') || 'No constraints'}{#if service.preferences.length}<div class="text-muted-foreground">{service.preferences.length} preference(s)</div>{/if}</Table.Cell>
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<Table.Cell>
 										<div class="flex justify-end gap-2">
@@ -653,8 +917,8 @@
 						<Table.Body>
 							{#each data.stacks as stack (stack.name)}
 								<Table.Row>
-									<Table.Cell><div class="font-medium">{stack.name}</div><div class="text-xs text-muted-foreground">Swarm stack</div></Table.Cell>
-									<Table.Cell><div class="flex flex-wrap gap-1">{#each stack.services as service (service.id)}<Badge variant="outline">{service.name}</Badge>{/each}</div></Table.Cell>
+									<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('stack', stack.name)}>{stack.name}</a><div class="text-xs text-muted-foreground">Swarm stack</div></Table.Cell>
+									<Table.Cell><div class="flex flex-wrap gap-1">{#each stack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant="outline">{service.name}</Badge></a>{/each}</div></Table.Cell>
 									<Table.Cell>{stack.runningTasks} / {stack.desiredTasks ?? '—'}</Table.Cell>
 									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 										<Table.Cell><div class="flex justify-end gap-2">
@@ -705,9 +969,9 @@
 							{#each visibleTasks as task (task.id)}
 								<Table.Row>
 									<Table.Cell>
-										<div class="font-medium">{serviceName(task.serviceId)}</div>
+										{#if task.serviceId}<a class="font-medium text-primary hover:underline" href={detailHref('service', task.serviceId)}>{serviceName(task.serviceId)}</a>{:else}<div class="font-medium">Unassigned</div>{/if}
 										<div class="text-xs text-muted-foreground">
-											{#if task.name}{task.name} · {/if}<span class="font-mono" title={task.id}>{task.id.slice(0, 12)}</span>
+											{#if task.name}{task.name} · {/if}<a class="font-mono hover:text-foreground hover:underline" href={detailHref('task', task.id)} title={task.id}>{task.id.slice(0, 12)}</a>
 										</div>
 									</Table.Cell>
 									<Table.Cell>
@@ -715,7 +979,7 @@
 										{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}
 									</Table.Cell>
 									<Table.Cell><Badge variant="outline" class="capitalize">{task.desiredState ?? '—'}</Badge></Table.Cell>
-									<Table.Cell>{nodeName(task.nodeId)}</Table.Cell>
+									<Table.Cell>{#if task.nodeId}<a class="text-primary hover:underline" href={detailHref('node', task.nodeId)}>{nodeName(task.nodeId)}</a>{:else}Unassigned{/if}</Table.Cell>
 									<Table.Cell>{task.slot ?? '—'}</Table.Cell>
 									<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={task.image}>{task.image ?? '—'}</Table.Cell>
 								</Table.Row>
@@ -740,11 +1004,11 @@
 						<Table.Body>
 							{#each data.configs as config (config.id)}
 								<Table.Row>
-									<Table.Cell class="font-medium">{config.name}</Table.Cell>
+									<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('config', config.id)}>{config.name}</a>{#if Object.keys(config.labels).length}<div class="text-xs text-muted-foreground">{Object.keys(config.labels).length} label(s)</div>{/if}</Table.Cell>
 									<Table.Cell class="font-mono text-xs" title={config.id}>{config.id.slice(0, 12)}</Table.Cell>
 									<Table.Cell class="text-sm">{formatDate(config.createdAt)}</Table.Cell>
 									<Table.Cell class="text-sm">{formatDate(config.updatedAt)}</Table.Cell>
-									<Table.Cell>{#if config.services.length}<div class="flex flex-wrap gap-1">{#each config.services as usage (usage.serviceId)}<Badge variant="outline">{usage.serviceName}</Badge>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
+									<Table.Cell>{#if config.services.length}<div class="flex flex-wrap gap-1">{#each config.services as usage (usage.serviceId)}<a href={detailHref('service', usage.serviceId)}><Badge variant="outline">{usage.serviceName}</Badge></a>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
 									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 										<Table.Cell class="text-right"><Button variant="destructive" size="sm" onclick={() => openDeleteResourceDialog('config', config)} disabled={resourcePending || config.services.length > 0} title={config.services.length ? 'Update or remove the using Services first' : 'Delete Config'}><Trash2 class="h-4 w-4" /> Delete</Button></Table.Cell>
 									{/if}
@@ -770,11 +1034,11 @@
 						<Table.Body>
 							{#each data.secrets as secret (secret.id)}
 								<Table.Row>
-									<Table.Cell class="font-medium">{secret.name}</Table.Cell>
+									<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('secret', secret.id)}>{secret.name}</a>{#if Object.keys(secret.labels).length}<div class="text-xs text-muted-foreground">{Object.keys(secret.labels).length} label(s)</div>{/if}</Table.Cell>
 									<Table.Cell class="font-mono text-xs" title={secret.id}>{secret.id.slice(0, 12)}</Table.Cell>
 									<Table.Cell class="text-sm">{formatDate(secret.createdAt)}</Table.Cell>
 									<Table.Cell class="text-sm">{formatDate(secret.updatedAt)}</Table.Cell>
-									<Table.Cell>{#if secret.services.length}<div class="flex flex-wrap gap-1">{#each secret.services as usage (usage.serviceId)}<Badge variant="outline">{usage.serviceName}</Badge>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
+									<Table.Cell>{#if secret.services.length}<div class="flex flex-wrap gap-1">{#each secret.services as usage (usage.serviceId)}<a href={detailHref('service', usage.serviceId)}><Badge variant="outline">{usage.serviceName}</Badge></a>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
 									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 										<Table.Cell class="text-right"><Button variant="destructive" size="sm" onclick={() => openDeleteResourceDialog('secret', secret)} disabled={resourcePending || secret.services.length > 0} title={secret.services.length ? 'Update or remove the using Services first' : 'Delete Secret'}><Trash2 class="h-4 w-4" /> Delete</Button></Table.Cell>
 									{/if}
@@ -880,6 +1144,58 @@
 				{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
 				Delete {resourceLabel(resourceKind)}
 			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={metadataDialogOpen} onOpenChange={(open) => { if (!open) closeMetadataDialog(); }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Edit {resourceLabel(metadataKind)} labels</Dialog.Title>
+			<Dialog.Description>
+				Docker permits in-place label updates only. The immutable {metadataKind === 'config' ? 'Config data' : 'Secret value'} and name are left unchanged.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-2">
+			<Label for="swarm-resource-labels">Labels</Label>
+			<Textarea id="swarm-resource-labels" bind:value={metadataLabels} disabled={resourcePending} rows={8} placeholder={'com.example.team=platform\ncom.example.environment=production'} />
+			<p class="text-xs text-muted-foreground">One <code>key=value</code> label per line. Remove a line to remove that label.</p>
+		</div>
+		{#if resourceError}<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{resourceError}</Alert.Description></Alert.Root>{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeMetadataDialog} disabled={resourcePending}>Cancel</Button>
+			<Button onclick={updateResourceMetadata} disabled={resourcePending || !metadataResource}>{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}Save labels</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={replaceConfigDialogOpen} onOpenChange={(open) => { if (!open) closeReplaceConfigDialog(); }}>
+	<Dialog.Content class="flex h-[min(85vh,48rem)] max-w-3xl flex-col">
+		<Dialog.Header>
+			<Dialog.Title>Create replacement for “{replaceConfigSource?.name}”</Dialog.Title>
+			<Dialog.Description>
+				Docker Config data is immutable. This creates a new Config and deliberately leaves every existing Service and Stack reference on the current Config.
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-2">
+			<Label for="swarm-replacement-name">New Config name</Label>
+			<Input id="swarm-replacement-name" bind:value={replacementName} disabled={resourcePending} autocomplete="off" />
+		</div>
+		<div class="mt-3 min-h-0 flex-1 space-y-2">
+			<Label for="swarm-replacement-data">New Config data</Label>
+			<Textarea id="swarm-replacement-data" class="h-[calc(100%-1.75rem)] min-h-48 font-mono text-xs" bind:value={replacementValue} disabled={resourcePending} />
+		</div>
+		<label class="mt-3 flex items-start gap-3 rounded-md border p-3 text-sm">
+			<Checkbox bind:checked={replacementConfirmed} disabled={resourcePending} />
+			<span><strong>I understand existing references will not change.</strong><br /><span class="text-muted-foreground">After creation, update the linked Service or the stored Stack file explicitly, verify rollout, then remove the old Config.</span></span>
+		</label>
+		{#if replaceConfigSource?.services.length}
+			<p class="text-xs text-muted-foreground">Current users: {replaceConfigSource.services.map((usage) => usage.serviceName).join(', ')}</p>
+		{/if}
+		{#if resourceError}<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{resourceError}</Alert.Description></Alert.Root>{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeReplaceConfigDialog} disabled={resourcePending}>Cancel</Button>
+			<Button onclick={createConfigReplacement} disabled={resourcePending || !replacementName.trim() || !replacementConfirmed}>{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}Create replacement</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

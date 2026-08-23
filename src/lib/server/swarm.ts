@@ -23,8 +23,10 @@ import {
 import {
 	performSwarmResourceCreate,
 	performSwarmResourceDelete,
+	performSwarmResourceLabelUpdate,
 	type SwarmResourceCreateResult,
 	type SwarmResourceDeleteResult,
+	type SwarmResourceLabelUpdateResult,
 	type SwarmResourceKind
 } from './swarm-resource';
 
@@ -181,6 +183,22 @@ export async function deleteSwarmResource(
 		capability,
 		kind,
 		resourceId,
+		(path, options = {}) => swarmResourceRequest(environmentId, path, options)
+	);
+}
+
+export async function updateSwarmResourceLabels(
+	environmentId: number,
+	kind: SwarmResourceKind,
+	resourceId: string,
+	labels: unknown
+): Promise<SwarmResourceLabelUpdateResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmResourceLabelUpdate(
+		capability,
+		kind,
+		resourceId,
+		labels,
 		(path, options = {}) => swarmResourceRequest(environmentId, path, options)
 	);
 }
