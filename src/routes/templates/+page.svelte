@@ -26,6 +26,7 @@
 	import StackModal from '../stacks/StackModal.svelte';
 	import { currentEnvironment } from '$lib/stores/environment';
 	import { swarmCapability } from '$lib/stores/swarm';
+	import { capabilityForEnvironment } from '$lib/stores/swarm-capability';
 
 	// State
 	let templates = $state<TemplateItem[]>([]);
@@ -50,11 +51,15 @@
 	let showStackModal = $state(false);
 	let stackModalCompose = $state('');
 	let stackModalName = $state('');
-	const composeMutationsAllowed = $derived(
-		$swarmCapability.environmentId === ($currentEnvironment?.id ?? null) &&
-		!$swarmCapability.loading &&
-		$swarmCapability.capability?.kind === 'standalone'
+	const composeCapability = $derived(
+		capabilityForEnvironment($swarmCapability, $currentEnvironment?.id)
 	);
+	const composeCapabilityLoading = $derived(
+		Boolean($currentEnvironment) && (
+			$swarmCapability.environmentId !== $currentEnvironment?.id || $swarmCapability.loading
+		)
+	);
+	const composeMutationsAllowed = $derived(composeCapability?.kind === 'standalone');
 
 	$effect(() => {
 		if (!composeMutationsAllowed) showStackModal = false;
@@ -138,10 +143,14 @@
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
-	{#if $currentEnvironment && !composeMutationsAllowed}
+	{#if composeCapabilityLoading}
+		<div class="shrink-0 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+			Checking this environment's template deployment capability…
+		</div>
+	{:else if $currentEnvironment && !composeMutationsAllowed}
 		<div class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
 			Template deployment is available only for a confirmed standalone Docker environment.
-			{#if $swarmCapability.capability?.kind === 'swarm-manager'}<a class="ml-1 font-medium underline underline-offset-2" href="/swarm?tab=stacks">Use Swarm Stacks</a>{:else if $swarmCapability.capability?.kind === 'swarm-worker'} Connect to a Swarm manager for stack management.{/if}
+			{#if composeCapability?.kind === 'swarm-manager'}<a class="ml-1 font-medium underline underline-offset-2" href="/swarm?tab=stacks">Use Swarm Stacks</a>{:else if composeCapability?.kind === 'swarm-worker'} Connect to a Swarm manager for stack management.{/if}
 		</div>
 	{/if}
 	<!-- Header -->

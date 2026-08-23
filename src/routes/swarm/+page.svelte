@@ -6,7 +6,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound, ChevronRight, Copy, Check } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Minus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound, ChevronRight, Copy, Check } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -29,10 +29,11 @@
 	import { swarmCapability } from '$lib/stores/swarm';
 	import { copyToClipboard } from '$lib/utils/clipboard';
 	import type { SwarmConfigSummary, SwarmNodeSummary, SwarmReadModel, SwarmSecretSummary, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
-	import { filterSwarmTasks, isFailedSwarmTask, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
+	import { filterSwarmTasks, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
 	import { isSwarmDetailAvailable, parseSwarmDetail, swarmDetailHref, swarmTabHref, SWARM_TABS, type SwarmDetailKind, type SwarmTab } from '$lib/swarm-navigation';
 	import { planSwarmConfigReplacement } from '$lib/swarm-config-replacement';
 	import { servicesForSwarmNode, tasksForSwarmNode, tasksForSwarmService } from '$lib/swarm-relations';
+	import { adjustedReplicaCount, canScaleSwarmService, hasReplicaMismatch, swarmStatusPresentation, swarmTaskStatusPresentation } from '$lib/swarm-service-ux';
 
 	type NodeDialogAction =
 		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
@@ -176,10 +177,6 @@
 	function formatPort(port: SwarmServiceSummary['ports'][number]): string {
 		const published = port.publishedPort ? `${port.publishedPort}:` : '';
 		return `${published}${port.targetPort ?? '—'}/${port.protocol ?? 'tcp'}${port.publishMode ? ` (${port.publishMode})` : ''}`;
-	}
-
-	function healthVariant(health: SwarmServiceSummary['healthState']): 'secondary' | 'destructive' | 'outline' {
-		return health === 'healthy' ? 'secondary' : health === 'degraded' ? 'destructive' : 'outline';
 	}
 
 	function detailHref(kind: SwarmDetailKind, id: string): string {
@@ -449,9 +446,9 @@
 		return data?.nodes.find((node) => node.id === nodeId)?.hostname ?? nodeId?.slice(0, 12) ?? 'Unassigned';
 	}
 
-	function taskStateVariant(task: SwarmReadModel['tasks'][number]): 'secondary' | 'destructive' | 'outline' {
-		if (isFailedSwarmTask(task)) return 'destructive';
-		return task.state === 'running' ? 'secondary' : 'outline';
+	function adjustScaleReplicas(delta: number): void {
+		scaleReplicas = String(adjustedReplicaCount(scaleReplicas, delta));
+		actionError = null;
 	}
 
 	function openNodeActionDialog(node: SwarmNodeSummary, action: NodeDialogAction): void {
@@ -503,6 +500,7 @@
 	}
 
 	function openScaleDialog(service: SwarmServiceSummary): void {
+		if (!canScaleSwarmService(service.mode)) return;
 		actionService = service;
 		actionType = 'scale';
 		scaleReplicas = String(service.desiredTasks ?? 0);
@@ -527,6 +525,10 @@
 	async function confirmServiceAction(): Promise<void> {
 		if (!environmentId || !actionService || actionPending) return;
 		const replicas = Number(scaleReplicas);
+		if (actionType === 'scale' && !canScaleSwarmService(actionService.mode)) {
+			actionError = 'Only replicated services can be scaled.';
+			return;
+		}
 		if (actionType === 'scale' && (!Number.isSafeInteger(replicas) || replicas < 0)) {
 			actionError = 'Replicas must be a non-negative integer.';
 			return;
@@ -802,7 +804,7 @@
 								<div><Card.Title>{selectedService.name}</Card.Title><Card.Description class="font-mono break-all">{selectedService.id}</Card.Description></div>
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<div class="flex gap-2">
-										{#if selectedService.mode === 'replicated'}<Button size="sm" variant="outline" onclick={() => openScaleDialog(selectedService)}><SlidersHorizontal class="h-4 w-4" /> Scale</Button>{/if}
+										{#if canScaleSwarmService(selectedService.mode)}<Button size="sm" variant="outline" onclick={() => openScaleDialog(selectedService)}><SlidersHorizontal class="h-4 w-4" /> Scale</Button>{/if}
 										{#if selectedService.mode === 'replicated' || selectedService.mode === 'global'}<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>{/if}
 									</div>
 								{/if}
@@ -811,9 +813,24 @@
 						<Card.Content class="space-y-5">
 							<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
 								<div><span class="text-muted-foreground">Image</span><p class="break-all font-mono text-xs">{selectedService.image ?? '—'}</p></div>
-								<div><span class="text-muted-foreground">Mode / replicas</span><p class="capitalize">{selectedService.mode.replace('-', ' ')} · {selectedService.runningTasks} / {selectedService.desiredTasks ?? '—'}</p></div>
-								<div><span class="text-muted-foreground">Health</span><p><Badge variant={healthVariant(selectedService.healthState)} class="capitalize">{selectedService.healthState}</Badge></p></div>
-								<div><span class="text-muted-foreground">Update state</span><p class="capitalize">{selectedService.updateStatus?.state ?? 'No active update'}</p>{#if selectedService.updateStatus?.message}<p class="text-xs text-muted-foreground">{selectedService.updateStatus.message}</p>{/if}</div>
+								<div>
+									<span class="text-muted-foreground">Mode</span>
+									<p><Badge variant="outline" class="capitalize">{selectedService.mode.replace('-', ' ')}</Badge></p>
+									{#if selectedService.mode === 'global'}<p class="mt-1 text-xs text-muted-foreground">One task per eligible node. Placement determines where tasks run.</p>{/if}
+								</div>
+								<div>
+									<span class="text-muted-foreground">Replicas</span>
+									{#if selectedService.mode === 'replicated'}
+										<p><Badge variant={swarmStatusPresentation(hasReplicaMismatch(selectedService) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(selectedService) ? 'partial' : 'stable').className}">{selectedService.runningTasks} / {selectedService.desiredTasks ?? '—'}</Badge></p>
+										<p class="mt-1 text-xs text-muted-foreground">Running / desired{#if hasReplicaMismatch(selectedService)} · reconciliation in progress{/if}</p>
+									{:else if selectedService.mode === 'global'}
+										<p class="text-muted-foreground">Managed by eligible nodes</p>
+									{:else}
+										<p>{selectedService.runningTasks} running{#if selectedService.completedTasks > 0} · {selectedService.completedTasks} completed{/if}</p>
+									{/if}
+								</div>
+								<div><span class="text-muted-foreground">Health</span><p><Badge variant={swarmStatusPresentation(selectedService.healthState).variant} class="capitalize {swarmStatusPresentation(selectedService.healthState).className}">{selectedService.healthState}</Badge></p></div>
+								<div><span class="text-muted-foreground">Update state</span><p><Badge variant={swarmStatusPresentation(selectedService.updateStatus?.state ?? 'stable').variant} class="capitalize {swarmStatusPresentation(selectedService.updateStatus?.state ?? 'stable').className}">{selectedService.updateStatus?.state ?? 'stable'}</Badge></p>{#if selectedService.updateStatus?.message}<p class="mt-1 text-xs text-muted-foreground">{selectedService.updateStatus.message}</p>{/if}</div>
 								<div><span class="text-muted-foreground">Ports</span><p>{selectedService.ports.map(formatPort).join(', ') || 'None published'}</p></div>
 								<div><span class="text-muted-foreground">Placement</span><p>{selectedService.constraints.join(', ') || 'No constraints'}</p>{#if selectedService.preferences.length}<p class="text-xs text-muted-foreground">{selectedService.preferences.length} preference(s)</p>{/if}</div>
 								<div><span class="text-muted-foreground">Stack</span><p>{#if selectedService.stackName}<a class="font-medium text-primary hover:underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a>{:else}Standalone service{/if}</p></div>
@@ -828,8 +845,8 @@
 											{#each selectedServiceTasks as task (task.id)}
 												<Table.Row>
 													<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('task', task.id)}>{task.name ?? `Task ${task.id.slice(0, 12)}`}</a><div class="font-mono text-xs text-muted-foreground">{task.id.slice(0, 12)}</div></Table.Cell>
-													<Table.Cell><Badge variant={taskStateVariant(task)} class="capitalize">{task.state ?? 'unknown'}</Badge>{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}</Table.Cell>
-													<Table.Cell class="capitalize">{task.desiredState ?? '—'}</Table.Cell>
+											<Table.Cell><Badge variant={swarmTaskStatusPresentation(task.state, task.error).variant} class="capitalize {swarmTaskStatusPresentation(task.state, task.error).className}">{task.state ?? 'unknown'}</Badge>{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}</Table.Cell>
+											<Table.Cell class="capitalize text-muted-foreground">{task.desiredState ?? '—'}</Table.Cell>
 													<Table.Cell>{#if task.nodeId}<a class="font-medium text-primary hover:underline" href={detailHref('node', task.nodeId)}>{nodeName(task.nodeId)}</a>{:else}—{/if}</Table.Cell>
 													<Table.Cell>{task.slot ?? '—'}</Table.Cell>
 													<Table.Cell class="max-w-72 truncate font-mono text-xs" title={task.image}>{task.image ?? '—'}</Table.Cell>
@@ -849,8 +866,8 @@
 					</Card.Root>
 				{:else if selectedTask}
 					<Card.Root><Card.Header><Card.Title>{selectedTask.name ?? `Task ${selectedTask.id.slice(0, 12)}`}</Card.Title><Card.Description class="font-mono break-all">{selectedTask.id}</Card.Description></Card.Header><Card.Content class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
-						<div><span class="text-muted-foreground">Status</span><p><Badge variant={taskStateVariant(selectedTask)} class="capitalize">{selectedTask.state ?? 'unknown'}</Badge></p>{#if selectedTask.error || selectedTask.message}<p class="mt-1 text-xs {selectedTask.error ? 'text-destructive' : 'text-muted-foreground'}">{selectedTask.error || selectedTask.message}</p>{/if}</div>
-						<div><span class="text-muted-foreground">Desired state</span><p class="capitalize">{selectedTask.desiredState ?? '—'}</p></div>
+					<div><span class="text-muted-foreground">Status</span><p><Badge variant={swarmTaskStatusPresentation(selectedTask.state, selectedTask.error).variant} class="capitalize {swarmTaskStatusPresentation(selectedTask.state, selectedTask.error).className}">{selectedTask.state ?? 'unknown'}</Badge></p>{#if selectedTask.error || selectedTask.message}<p class="mt-1 text-xs {selectedTask.error ? 'text-destructive' : 'text-muted-foreground'}">{selectedTask.error || selectedTask.message}</p>{/if}</div>
+						<div><span class="text-muted-foreground">Desired state</span><p class="capitalize text-muted-foreground">{selectedTask.desiredState ?? '—'}</p></div>
 						<div><span class="text-muted-foreground">Service</span><p>{#if selectedTaskService}<a class="font-medium text-primary hover:underline" href={detailHref('service', selectedTaskService.id)}>{selectedTaskService.name}</a>{:else}{serviceName(selectedTask.serviceId)}{/if}</p></div>
 						<div><span class="text-muted-foreground">Node</span><p>{#if selectedTaskNode}<a class="font-medium text-primary hover:underline" href={detailHref('node', selectedTaskNode.id)}>{selectedTaskNode.hostname}</a>{:else}{nodeName(selectedTask.nodeId)}{/if}</p></div>
 						<div><span class="text-muted-foreground">Slot</span><p>{selectedTask.slot ?? '—'}</p></div><div class="sm:col-span-2"><span class="text-muted-foreground">Image</span><p class="break-all font-mono text-xs">{selectedTask.image ?? '—'}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedTask.statusTimestamp ?? selectedTask.updatedAt)}</p></div>
@@ -858,11 +875,11 @@
 				{:else if selectedNode}
 					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedNode.hostname}</Card.Title><Card.Description class="font-mono break-all">{selectedNode.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-1"><Button size="sm" variant="outline" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'active' })}>Active</Button><Button size="sm" variant="outline" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'pause' })}>Pause</Button><Button size="sm" variant="destructive" onclick={() => openNodeActionDialog(selectedNode, { type: 'availability', availability: 'drain' })}>Drain</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
 						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Role</span><p class="capitalize">{selectedNode.role}</p></div><div><span class="text-muted-foreground">Availability</span><p class="capitalize">{selectedNode.availability}</p></div><div><span class="text-muted-foreground">Status</span><p class="capitalize">{selectedNode.status}</p></div><div><span class="text-muted-foreground">Address</span><p>{selectedNode.address ?? '—'}</p></div><div><span class="text-muted-foreground">Engine</span><p>{selectedNode.engineVersion ?? '—'}</p></div><div><span class="text-muted-foreground">Platform</span><p>{selectedNode.platform?.os ?? '—'} / {selectedNode.platform?.architecture ?? '—'}</p></div><div><span class="text-muted-foreground">Resources</span><p>{formatCpu(selectedNode.resources?.nanoCpus)} · {formatBytes(selectedNode.resources?.memoryBytes)}</p></div><div><span class="text-muted-foreground">Tasks</span><p>{selectedNodeTasks.length}</p></div></div>
-						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Services on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeServices as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant="outline">{service.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Tasks on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeTasks as task (task.id)}<a href={detailHref('task', task.id)}><Badge variant={taskStateVariant(task)}>{serviceName(task.serviceId)} · {task.slot ?? task.id.slice(0, 8)}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div></div>
+						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Services on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeServices as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant="outline">{service.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Tasks on this node</h3><div class="flex flex-wrap gap-1">{#each selectedNodeTasks as task (task.id)}<a href={detailHref('task', task.id)}><Badge variant={swarmTaskStatusPresentation(task.state, task.error).variant} class={swarmTaskStatusPresentation(task.state, task.error).className}>{serviceName(task.serviceId)} · {task.slot ?? task.id.slice(0, 8)}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div></div>
 						{#if Object.keys(selectedNode.labels).length}<div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedNode.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{/each}</div></div>{/if}
 					</Card.Content></Card.Root>
 				{:else if selectedStack}
-					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedStack.name}</Card.Title><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={healthVariant(service.healthState)}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedStack.name}</Card.Title><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={swarmStatusPresentation(service.healthState).variant} class={swarmStatusPresentation(service.healthState).className}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
 				{:else if selectedConfig}
 					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedConfig.name}</Card.Title><Card.Description class="font-mono break-all">{selectedConfig.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('config', selectedConfig)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="outline" onclick={() => openReplaceConfigDialog(selectedConfig)}><Pencil class="h-4 w-4" /> Edit Config</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('config', selectedConfig)} disabled={selectedConfig.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
 						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Created</span><p>{formatDate(selectedConfig.createdAt)}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedConfig.updatedAt)}</p></div><div><span class="text-muted-foreground">Version</span><p>{selectedConfig.version}</p></div><div><span class="text-muted-foreground">Stacks</span><p>{#each selectedConfig.stackNames as stack, index (stack)}{#if index}, {/if}<a class="font-medium text-primary hover:underline" href={detailHref('stack', stack)}>{stack}</a>{:else}None derived{/each}</p></div></div>
@@ -938,14 +955,23 @@
 							<Table.Row>
 								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('service', service.id)}>{service.name}</a><div class="text-xs text-muted-foreground font-mono">{service.id.slice(0, 12)}</div>{#if service.stackName}<a class="text-xs text-muted-foreground hover:text-foreground hover:underline" href={detailHref('stack', service.stackName)}>{service.stackName}</a>{/if}</Table.Cell>
 								<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={service.image}>{service.image ?? '—'}</Table.Cell>
-								<Table.Cell class="capitalize">{service.mode.replace('-', ' ')}</Table.Cell>
-								<Table.Cell>{service.runningTasks} / {service.desiredTasks ?? '—'}{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} complete</div>{/if}</Table.Cell>
-								<Table.Cell><Badge variant={healthVariant(service.healthState)} class="capitalize">{service.healthState}</Badge>{#if service.updateStatus?.state}<div class="mt-1 text-xs capitalize text-muted-foreground">{service.updateStatus.state}</div>{/if}</Table.Cell>
+								<Table.Cell><Badge variant="outline" class="capitalize">{service.mode.replace('-', ' ')}</Badge>{#if service.mode === 'global'}<div class="mt-1 max-w-40 text-xs text-muted-foreground">One task per eligible node</div>{/if}</Table.Cell>
+								<Table.Cell>
+									{#if service.mode === 'replicated'}
+										<Badge variant={swarmStatusPresentation(hasReplicaMismatch(service) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(service) ? 'partial' : 'stable').className}">{service.runningTasks} / {service.desiredTasks ?? '—'}</Badge>
+										<div class="mt-1 text-xs text-muted-foreground">Running / desired</div>
+									{:else if service.mode === 'global'}
+										<span class="text-xs text-muted-foreground">Managed by eligible nodes</span>
+									{:else}
+										<span>{service.runningTasks} running</span>{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} completed</div>{/if}
+									{/if}
+								</Table.Cell>
+								<Table.Cell><Badge variant={swarmStatusPresentation(service.healthState).variant} class="capitalize {swarmStatusPresentation(service.healthState).className}">{service.healthState}</Badge>{#if service.updateStatus?.state}<div class="mt-1"><Badge variant={swarmStatusPresentation(service.updateStatus.state).variant} class="capitalize {swarmStatusPresentation(service.updateStatus.state).className}">{service.updateStatus.state}</Badge></div>{/if}</Table.Cell>
 								<Table.Cell class="max-w-[22rem] text-xs">{service.constraints.join(', ') || 'No constraints'}{#if service.preferences.length}<div class="text-muted-foreground">{service.preferences.length} preference(s)</div>{/if}</Table.Cell>
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<Table.Cell>
 										<div class="flex justify-end gap-2">
-											{#if service.mode === 'replicated'}
+											{#if canScaleSwarmService(service.mode)}
 												<Button variant="outline" size="sm" onclick={() => openScaleDialog(service)} disabled={actionPending}>
 													<SlidersHorizontal class="h-4 w-4" /> Scale
 												</Button>
@@ -1035,10 +1061,10 @@
 										</div>
 									</Table.Cell>
 									<Table.Cell>
-										<Badge variant={taskStateVariant(task)} class="capitalize">{task.state ?? 'unknown'}</Badge>
+										<Badge variant={swarmTaskStatusPresentation(task.state, task.error).variant} class="capitalize {swarmTaskStatusPresentation(task.state, task.error).className}">{task.state ?? 'unknown'}</Badge>
 										{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}
 									</Table.Cell>
-									<Table.Cell><Badge variant="outline" class="capitalize">{task.desiredState ?? '—'}</Badge></Table.Cell>
+									<Table.Cell class="capitalize text-muted-foreground">{task.desiredState ?? '—'}</Table.Cell>
 									<Table.Cell>{#if task.nodeId}<a class="text-primary hover:underline" href={detailHref('node', task.nodeId)}>{nodeName(task.nodeId)}</a>{:else}Unassigned{/if}</Table.Cell>
 									<Table.Cell>{task.slot ?? '—'}</Table.Cell>
 									<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={task.image}>{task.image ?? '—'}</Table.Cell>
@@ -1285,7 +1311,16 @@
 		{#if actionType === 'scale'}
 			<div class="space-y-2">
 				<Label for="swarm-service-replicas">Replicas</Label>
-				<Input id="swarm-service-replicas" type="number" min="0" step="1" bind:value={scaleReplicas} disabled={actionPending} />
+				<div class="flex items-center justify-center gap-2">
+					<Button type="button" variant="outline" size="icon" onclick={() => adjustScaleReplicas(-1)} disabled={actionPending || Number(scaleReplicas) <= 0} aria-label="Decrease replicas">
+						<Minus class="h-4 w-4" />
+					</Button>
+					<Input id="swarm-service-replicas" class="w-24 text-center font-medium tabular-nums" type="number" min="0" step="1" bind:value={scaleReplicas} disabled={actionPending} aria-label="Desired replicas" />
+					<Button type="button" variant="outline" size="icon" onclick={() => adjustScaleReplicas(1)} disabled={actionPending} aria-label="Increase replicas">
+						<Plus class="h-4 w-4" />
+					</Button>
+				</div>
+				<p class="text-center text-xs text-muted-foreground">Currently {actionService?.runningTasks ?? 0} running. Applies only to this replicated service.</p>
 			</div>
 		{/if}
 		{#if actionError}
@@ -1296,9 +1331,9 @@
 		{/if}
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeActionDialog} disabled={actionPending}>Cancel</Button>
-			<Button onclick={confirmServiceAction} disabled={actionPending}>
+			<Button onclick={confirmServiceAction} disabled={actionPending || (actionType === 'scale' && (!Number.isSafeInteger(Number(scaleReplicas)) || Number(scaleReplicas) < 0))}>
 				{#if actionPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
-				{actionType === 'scale' ? 'Scale service' : 'Restart service'}
+				{actionType === 'scale' ? 'Apply' : 'Restart service'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

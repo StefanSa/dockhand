@@ -20,6 +20,14 @@ const initialState: SwarmCapabilityState = {
 	error: null
 };
 
+export function capabilityForEnvironment(
+	state: SwarmCapabilityState,
+	environmentId: number | null | undefined
+): SwarmCapability | null {
+	if (!environmentId || state.environmentId !== environmentId || state.loading) return null;
+	return state.capability;
+}
+
 export function createSwarmCapabilityStore(fetchCapability: SwarmCapabilityFetcher) {
 	const { subscribe, set, update } = writable<SwarmCapabilityState>(initialState);
 	let requestSequence = 0;
@@ -31,12 +39,12 @@ export function createSwarmCapabilityStore(fetchCapability: SwarmCapabilityFetch
 			return;
 		}
 
-		update((state) => ({
+		set({
 			environmentId,
-			capability: state.environmentId === environmentId ? state.capability : null,
+			capability: null,
 			loading: true,
 			error: null
-		}));
+		});
 
 		try {
 			const capability = await fetchCapability(environmentId, refresh);
@@ -57,8 +65,11 @@ export function createSwarmCapabilityStore(fetchCapability: SwarmCapabilityFetch
 		subscribe,
 		load,
 		setCapability(environmentId: number, capability: SwarmCapability) {
-			requestSequence++;
-			set({ environmentId, capability, loading: false, error: null });
+			update((state) => {
+				if (state.environmentId !== environmentId) return state;
+				requestSequence++;
+				return { environmentId, capability, loading: false, error: null };
+			});
 		},
 		clear() {
 			requestSequence++;

@@ -51,6 +51,7 @@
 	import { formatHostPortUrl } from '$lib/utils/url';
 	import { formatBytes, formatBytesCompact } from '$lib/utils/format';
 	import { swarmCapability } from '$lib/stores/swarm';
+	import { capabilityForEnvironment } from '$lib/stores/swarm-capability';
 
 	type SortField = 'name' | 'containers' | 'status' | 'cpu' | 'memory';
 	type SortDirection = 'asc' | 'desc';
@@ -80,9 +81,12 @@
 	let editingGitStack = $state<any>(null);
 	let envId = $state<number | null>(null);
 	const composeCapability = $derived(
-		$swarmCapability.environmentId === ($currentEnvironment?.id ?? null) && !$swarmCapability.loading
-			? $swarmCapability.capability
-			: null
+		capabilityForEnvironment($swarmCapability, $currentEnvironment?.id)
+	);
+	const composeCapabilityLoading = $derived(
+		Boolean($currentEnvironment) && (
+			$swarmCapability.environmentId !== $currentEnvironment?.id || $swarmCapability.loading
+		)
 	);
 	const composeMutationsAllowed = $derived(composeCapability?.kind === 'standalone');
 
@@ -1448,15 +1452,17 @@
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
-	{#if $currentEnvironment && !composeMutationsAllowed}
+	{#if composeCapabilityLoading}
+		<div class="shrink-0 rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+			Checking this environment's stack capability…
+		</div>
+	{:else if $currentEnvironment && !composeMutationsAllowed}
 		<div class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
 			{#if composeCapability?.kind === 'swarm-manager'}
 				Normal Compose stack changes are disabled on a Swarm manager.
 				<a class="ml-1 font-medium underline underline-offset-2" href="/swarm?tab=stacks">Open Swarm Stacks</a>
 			{:else if composeCapability?.kind === 'swarm-worker'}
 				This Swarm worker is read-only for stack management. Connect to a Swarm manager to manage Swarm Stacks.
-			{:else if $swarmCapability.loading || $swarmCapability.environmentId !== $currentEnvironment.id}
-				Checking this environment's stack capability…
 			{:else}
 				Compose stack changes remain disabled until this environment is confirmed as standalone Docker.
 			{/if}

@@ -41,6 +41,8 @@
 	import { appSettings } from '$lib/stores/settings';
 	import { sidebarPreferencesStore, orderItems } from '$lib/stores/sidebar-preferences';
 	import { swarmCapability } from '$lib/stores/swarm';
+	import { capabilityForEnvironment } from '$lib/stores/swarm-capability';
+	import { currentEnvironment } from '$lib/stores/environment';
 	import { isSwarmEnvironment } from '$lib/types/swarm';
 	import * as Avatar from '$lib/components/ui/avatar';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -72,6 +74,9 @@
 	}
 
 	const currentPath = $derived($page.url.pathname);
+	const activeSwarmCapability = $derived(
+		capabilityForEnvironment($swarmCapability, $currentEnvironment?.id)
+	);
 	const sidebar = useSidebar();
 
 	function isActive(path: string): boolean {
@@ -100,7 +105,7 @@
 		if (item.href === '/backups' && !$page.data.backupsEnabled) {
 			return false;
 		}
-		if (item.swarmOnly && !isSwarmEnvironment($swarmCapability.capability)) {
+		if (item.swarmOnly && !isSwarmEnvironment(activeSwarmCapability)) {
 			return false;
 		}
 
