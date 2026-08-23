@@ -42,6 +42,7 @@
 		id: number;
 		name: string;
 		icon: string;
+		composeStandalone?: boolean;
 	}
 
 	interface Props {
@@ -71,10 +72,19 @@
 		try {
 			const response = await fetch('/api/environments');
 			if (response.ok) {
-				environments = await response.json();
-				// Default to first environment
-				if (environments.length > 0) {
-					defaultEnvId = environments[0].id;
+				const loaded: Environment[] = await response.json();
+				environments = await Promise.all(loaded.map(async (environment) => {
+					try {
+						const capabilityResponse = await fetch(`/api/environments/${environment.id}/capabilities`);
+						const capability = await capabilityResponse.json();
+						return { ...environment, composeStandalone: capabilityResponse.ok && capability.kind === 'standalone' };
+					} catch {
+						return { ...environment, composeStandalone: false };
+					}
+				}));
+				const firstStandalone = environments.find((environment) => environment.composeStandalone);
+				if (firstStandalone) {
+					defaultEnvId = firstStandalone.id;
 				}
 			}
 		} catch (err) {
@@ -95,7 +105,9 @@
 			const newSelections = new Map<string, number>();
 			for (const stack of result.discovered) {
 				if (stack.unadoptable) continue; // dockhand.adopt=false — not selectable (#998)
-				const runningEnvId = stack.runningOn?.[0]?.envId;
+				const runningEnvId = stack.runningOn?.find((running) =>
+					environments.some((environment) => environment.id === running.envId && environment.composeStandalone)
+				)?.envId;
 				newSelections.set(stack.composePath, runningEnvId ?? defaultEnvId);
 			}
 			stackSelections = newSelections;
@@ -109,6 +121,7 @@
 	});
 
 	const selectedCount = $derived(stackSelections.size);
+	const composeEnvironments = $derived(environments.filter((environment) => environment.composeStandalone));
 
 	// Stacks marked dockhand.adopt=false can't be selected (#998), so select-all
 	// reasons over the adoptable subset only.
@@ -186,6 +199,12 @@
 
 	async function handleAdopt() {
 		if (!result || stackSelections.size === 0) return;
+		if ([...stackSelections.values()].some((environmentId) =>
+			!environments.some((environment) => environment.id === environmentId && environment.composeStandalone)
+		)) {
+			toast.error('Compose stacks can only be adopted into standalone Docker environments');
+			return;
+		}
 
 		// Group stacks by environment
 		const stacksByEnv = new Map<number, DiscoveredStack[]>();
@@ -330,11 +349,11 @@
 								<span class="text-sm">Loading...</span>
 							</div>
 						</div>
-					{:else if environments.length === 0}
+					{:else if composeEnvironments.length === 0}
 						<div class="flex items-center gap-3 p-3 rounded-lg border bg-muted/30">
-							<p class="text-sm text-destructive">No environments configured</p>
+							<p class="text-sm text-destructive">No standalone Docker environment is available. Swarm managers and workers cannot adopt Compose stacks.</p>
 						</div>
-					{:else if environments.length > 1}
+					{:else if composeEnvironments.length > 1}
 						<div class="flex items-center gap-3 p-3 rounded-lg border bg-muted/30">
 							<Label class="text-sm font-medium shrink-0">Adopt to:</Label>
 							<Select.Root
@@ -351,7 +370,7 @@
 									<span class="truncate">{defaultEnvName}</span>
 								</Select.Trigger>
 								<Select.Content>
-									{#each environments as env}
+									{#each composeEnvironments as env}
 										<Select.Item value={env.id.toString()}>
 											<div class="flex items-center gap-2">
 												<EnvironmentIcon icon={env.icon || 'globe'} envId={env.id} class="w-4 h-4 shrink-0" />
@@ -454,7 +473,7 @@
 										{/if}
 									</button>
 									<!-- Per-stack environment selector - only show when multiple environments -->
-									{#if isSelected(stack.composePath) && environments.length > 1}
+									{#if isSelected(stack.composePath) && composeEnvironments.length > 1}
 										<div class="shrink-0 flex items-center gap-2" onclick={(e) => e.stopPropagation()}>
 											<!-- Note if importing to different environment than running -->
 											{#if stack.runningOn && stack.runningOn.length > 0 && !stack.runningOn.some(r => r.envId === stackEnvId)}
@@ -485,7 +504,7 @@
 													<span class="truncate">{getStackEnv(stack.composePath)?.name || 'Select'}</span>
 												</Select.Trigger>
 												<Select.Content>
-													{#each environments as env}
+											{#each composeEnvironments as env}
 														<Select.Item value={env.id.toString()}>
 															<div class="flex items-center gap-2">
 																<EnvironmentIcon icon={env.icon || 'globe'} envId={env.id} class="w-3.5 h-3.5 shrink-0" />

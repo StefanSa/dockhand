@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { getGitStack } from '$lib/server/db';
 import { syncGitStack } from '$lib/server/git';
 import { authorize } from '$lib/server/authorize';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -12,6 +13,7 @@ import { authorize } from '$lib/server/authorize';
  * resp-200-example: {"success":true}
  * resp-403: Caller lacks the stacks:edit permission for the stack's environment
  * resp-404: No git stack exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: The sync failed
  */
 export const POST: RequestHandler = async ({ params, cookies }) => {
@@ -28,6 +30,9 @@ export const POST: RequestHandler = async ({ params, cookies }) => {
 		if (auth.authEnabled && !await auth.can('stacks', 'edit', gitStack.environmentId || undefined)) {
 			return json({ error: 'Permission denied' }, { status: 403 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(gitStack.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		const result = await syncGitStack(id);
 		return json(result);

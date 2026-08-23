@@ -4,6 +4,7 @@ import { authorize } from '$lib/server/authorize';
 import { auditStack } from '$lib/server/audit';
 import { createJobResponse } from '$lib/server/sse';
 import type { RequestHandler } from './$types';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -13,6 +14,7 @@ import type { RequestHandler } from './$types';
  * query: mode:string Restart mode — "recreate" recreates containers, anything else performs a plain restart
  * resp-200: Server-Sent-Events job stream with a final result event ({success, output})
  * resp-403: Permission denied (requires stacks:restart, or environment access denied on enterprise)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  */
 export const POST: RequestHandler = async (event) => {
 	const { params, url, cookies } = event;
@@ -30,6 +32,8 @@ export const POST: RequestHandler = async (event) => {
 	if (envIdNum && auth.isEnterprise && !(await auth.canAccessEnvironment(envIdNum))) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	const mode = url.searchParams.get('mode') === 'recreate' ? 'recreate' : 'restart';
 

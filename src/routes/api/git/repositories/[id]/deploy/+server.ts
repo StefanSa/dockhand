@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { getGitRepository } from '$lib/server/db';
 import { deployFromRepository } from '$lib/server/git';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -11,6 +12,7 @@ import { deployFromRepository } from '$lib/server/git';
  * resp-200-example: {"success":true}
  * resp-400: The id path segment is not a valid integer
  * resp-404: No repository exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: The deployment failed
  */
 export const POST: RequestHandler = async ({ params }) => {
@@ -24,6 +26,9 @@ export const POST: RequestHandler = async ({ params }) => {
 		if (!repository) {
 			return json({ error: 'Repository not found' }, { status: 404 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(repository.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		const result = await deployFromRepository(id);
 		return json(result);

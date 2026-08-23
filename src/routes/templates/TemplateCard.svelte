@@ -8,10 +8,11 @@
 	interface Props {
 		template: TemplateItem;
 		loading?: boolean;
+		disabled?: boolean;
 		onclick: () => void;
 	}
 
-	let { template, loading = false, onclick }: Props = $props();
+	let { template, loading = false, disabled = false, onclick }: Props = $props();
 
 	let logoError = $state(false);
 
@@ -28,9 +29,10 @@
 </script>
 
 <button
-	class="text-left w-full group"
-	onclick={onclick}
+	class="text-left w-full group {disabled ? 'cursor-not-allowed opacity-60' : ''}"
+	onclick={() => { if (!disabled) onclick(); }}
 	disabled={loading}
+	aria-disabled={disabled}
 >
 	<Card.Root class="h-full gap-0 py-0 transition-all hover:border-primary/50 hover:shadow-md group-focus-visible:ring-2 group-focus-visible:ring-ring {loading ? 'opacity-60' : ''}">
 		<Card.Header class="p-3 pb-1.5">

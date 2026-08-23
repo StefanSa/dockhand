@@ -4,6 +4,7 @@ import { getGitStack } from '$lib/server/db';
 import { deployGitStack } from '$lib/server/git';
 import { auditGitStack } from '$lib/server/audit';
 import { verifyWebhookSignature } from '$lib/server/webhook-signature';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 function detectSource(request: Request): string {
 	if (request.headers.get('x-hub-signature-256')) return 'github';
@@ -22,6 +23,7 @@ function detectSource(request: Request): string {
  * resp-401: The webhook signature or token did not verify
  * resp-403: Webhooks are not enabled for this stack
  * resp-404: No git stack exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: The deployment triggered by the webhook failed
  */
 export const POST: RequestHandler = async (event) => {
@@ -64,6 +66,9 @@ export const POST: RequestHandler = async (event) => {
 			return json({ error: 'Invalid webhook signature' }, { status: 401 });
 		}
 
+		const capabilityConflict = await composeMutationGuardResponse(gitStack.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
+
 		// Deploy the git stack (syncs and deploys only if there are changes)
 		const result = await deployGitStack(id, { force: false });
 		await auditGitStack(event, 'webhook', id, gitStack.stackName, gitStack.environmentId, {
@@ -88,6 +93,7 @@ export const POST: RequestHandler = async (event) => {
  * resp-401: The provided secret did not match the stack's webhook secret
  * resp-403: Webhooks are not enabled for this stack
  * resp-404: No git stack exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: The deployment triggered by the webhook failed
  */
 export const GET: RequestHandler = async (event) => {
@@ -123,6 +129,9 @@ export const GET: RequestHandler = async (event) => {
 			});
 			return json({ error: 'Invalid webhook secret' }, { status: 401 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(gitStack.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		// Deploy the git stack (syncs and deploys only if there are changes)
 		const result = await deployGitStack(id, { force: false });

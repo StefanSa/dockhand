@@ -5,6 +5,7 @@ import { deployGitStackWithProgress } from '$lib/server/git';
 import { authorize } from '$lib/server/authorize';
 import { createJob, appendLine, completeJob, failJob } from '$lib/server/jobs';
 import { prefersJSON, sseToJSON } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -16,6 +17,7 @@ import { prefersJSON, sseToJSON } from '$lib/server/sse';
  * resp-200-example: {"jobId":"a1b2c3d4"}
  * resp-403: Caller lacks the stacks:start permission for the stack's environment
  * resp-404: No git stack exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  */
 export const POST: RequestHandler = async ({ params, cookies, request }) => {
 	const auth = await authorize(cookies);
@@ -37,6 +39,9 @@ export const POST: RequestHandler = async ({ params, cookies, request }) => {
 			headers: { 'Content-Type': 'application/json' }
 		});
 	}
+
+	const capabilityConflict = await composeMutationGuardResponse(gitStack.environmentId); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	// Backward compat: API clients sending Accept: application/json get synchronous SSE result
 	if (prefersJSON(request)) {

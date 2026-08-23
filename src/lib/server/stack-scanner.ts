@@ -11,6 +11,7 @@ import yaml from 'js-yaml';
 import { getExternalStackPaths, getStackSources, upsertStackSource, type StackSourceType } from './db';
 import { DockerConnectionError } from './docker';
 import { normalizeStackName } from '$lib/utils/stack-name';
+import { requireComposeMutationCapability } from './compose-capability';
 
 // Compose file patterns to detect (in order of priority - prefer new style first)
 const COMPOSE_PATTERNS = ['compose.yaml', 'compose.yml', 'docker-compose.yml', 'docker-compose.yaml'];
@@ -202,6 +203,7 @@ export async function adoptStack(
 	stack: DiscoveredStack,
 	environmentId: number
 ): Promise<{ success: boolean; adoptedName?: string; error?: string }> {
+	await requireComposeMutationCapability(environmentId);
 	// Defense in depth: re-check the live running stack for dockhand.adopt=false so a
 	// forged/stale request can't bypass the UI filter (#998). Only enforceable while
 	// the stack is running, since the label lives on containers.

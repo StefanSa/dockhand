@@ -50,6 +50,7 @@
 	import { ErrorDialog } from '$lib/components/ui/error-dialog';
 	import { formatHostPortUrl } from '$lib/utils/url';
 	import { formatBytes, formatBytesCompact } from '$lib/utils/format';
+	import { swarmCapability } from '$lib/stores/swarm';
 
 	type SortField = 'name' | 'containers' | 'status' | 'cpu' | 'memory';
 	type SortDirection = 'asc' | 'desc';
@@ -78,6 +79,12 @@
 	let stackModalGitInfo = $state<{ commit?: string; url?: string; branch?: string } | null>(null);
 	let editingGitStack = $state<any>(null);
 	let envId = $state<number | null>(null);
+	const composeCapability = $derived(
+		$swarmCapability.environmentId === ($currentEnvironment?.id ?? null) && !$swarmCapability.loading
+			? $swarmCapability.capability
+			: null
+	);
+	const composeMutationsAllowed = $derived(composeCapability?.kind === 'standalone');
 
 	// Single-container update (mirrors the containers page action)
 	let showBatchUpdateModal = $state(false);
@@ -777,6 +784,19 @@
 		}
 	});
 
+	// Never leave a mutation dialog or selection active while capability is
+	// unresolved, stale for another environment, or known to be non-standalone.
+	$effect(() => {
+		if (composeMutationsAllowed) return;
+		showCreateModal = false;
+		showEditModal = false;
+		showGitModal = false;
+		showImportModal = false;
+		showDeleteModal = false;
+		showBatchOpModal = false;
+		selectedStacks = new Set();
+	});
+
 	// True when any stack container shows an update-available (amber) or
 	// check-failed (red) indicator — gates the "dismiss indicators" button.
 	const hasUpdateIndicators = $derived(
@@ -1099,7 +1119,7 @@
 
 	function editStack(name: string) {
 		editingStackName = name;
-		stackModalReadonly = false;
+		stackModalReadonly = !composeMutationsAllowed;
 		showEditModal = true;
 	}
 
@@ -1428,6 +1448,20 @@
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
+	{#if $currentEnvironment && !composeMutationsAllowed}
+		<div class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+			{#if composeCapability?.kind === 'swarm-manager'}
+				Normal Compose stack changes are disabled on a Swarm manager.
+				<a class="ml-1 font-medium underline underline-offset-2" href="/swarm?tab=stacks">Open Swarm Stacks</a>
+			{:else if composeCapability?.kind === 'swarm-worker'}
+				This Swarm worker is read-only for stack management. Connect to a Swarm manager to manage Swarm Stacks.
+			{:else if $swarmCapability.loading || $swarmCapability.environmentId !== $currentEnvironment.id}
+				Checking this environment's stack capability…
+			{:else}
+				Compose stack changes remain disabled until this environment is confirmed as standalone Docker.
+			{/if}
+		</div>
+	{/if}
 	<div class="shrink-0 flex flex-wrap justify-between items-center gap-3 min-h-8">
 		<PageHeader icon={Layers} title="Compose stacks" count={stacks.length}>
 			{#if stacks.length > 0}
@@ -1507,7 +1541,7 @@
 					<Rows3 class="w-4 h-4" />
 				{/if}
 			</Button>
-			{#if $canAccess('stacks', 'create')}
+			{#if composeMutationsAllowed && $canAccess('stacks', 'create')}
 				<Button size="sm" variant="outline" onclick={() => openGitModal()}>
 					<GitBranch class="w-3.5 h-3.5" />
 					From Git
@@ -1526,7 +1560,7 @@
 
 	<!-- Selection bar - always reserve space to prevent layout shift -->
 	<div class="h-4 shrink-0">
-		{#if selectedStacks.size > 0}
+		{#if composeMutationsAllowed && selectedStacks.size > 0}
 			<div class="flex items-center gap-1 text-xs text-muted-foreground h-full">
 			<span>{selectedInFilter.length} selected</span>
 			<button
@@ -1643,7 +1677,9 @@
 		<EmptyState
 			icon={Layers}
 			title="No compose stacks found"
-			description="Create a stack or deploy from Git to get started"
+			description={composeMutationsAllowed
+				? 'Create a stack or deploy from Git to get started'
+				: 'Compose stacks are available read-only for this environment'}
 		/>
 	{:else}
 		<!-- Main content area - changes layout based on mode -->
@@ -1656,7 +1692,7 @@
 			keyField="name"
 			gridId="stacks"
 			loading={loading}
-			selectable
+			selectable={composeMutationsAllowed}
 			bind:selectedKeys={selectedStacks}
 			expandable
 			bind:expandedKeys={expandedStacks}
@@ -1722,7 +1758,7 @@
 						</Tooltip.Root>
 					{/if}
 					{#if stack.updatesAvailable && $appSettings.highlightUpdates}
-						{#if source.sourceType === 'git' && source.gitStack}
+						{#if composeMutationsAllowed && source.sourceType === 'git' && source.gitStack}
 							<!-- Git stack: updates applied by deploying from the repo -->
 							<GitDeployProgressPopover
 								stackId={source.gitStack.id}
@@ -1743,7 +1779,7 @@
 									</button>
 								{/snippet}
 							</GitDeployProgressPopover>
-						{:else if source.sourceType !== 'external' && $canAccess('stacks', 'start')}
+						{:else if composeMutationsAllowed && source.sourceType !== 'external' && $canAccess('stacks', 'start')}
 							<!-- Internal stack: updates applied by redeploying with pull -->
 							<RedeployPopover
 								stackName={stack.name}
@@ -1979,7 +2015,7 @@
 								</button>
 							</div>
 						{/if}
-						{#if (stack.status === 'not deployed' || stack.status === 'created') && source.gitStack}
+						{#if composeMutationsAllowed && (stack.status === 'not deployed' || stack.status === 'created') && source.gitStack}
 							<button
 								type="button"
 								onclick={() => openGitModal(source.gitStack)}
@@ -2004,7 +2040,7 @@
 								{/snippet}
 							</GitDeployProgressPopover>
 						{:else}
-							{#if source.sourceType === 'git' && source.gitStack}
+							{#if composeMutationsAllowed && source.sourceType === 'git' && source.gitStack}
 								<GitDeployProgressPopover
 									stackId={source.gitStack.id}
 									stackName={stack.name}
@@ -2021,7 +2057,7 @@
 									{/snippet}
 								</GitDeployProgressPopover>
 							{/if}
-							{#if $canAccess('stacks', 'edit')}
+							{#if composeMutationsAllowed && $canAccess('stacks', 'edit')}
 								{#if source.sourceType === 'git' && source.gitStack}
 									<button
 										type="button"
@@ -2053,7 +2089,7 @@
 									<ScrollText class="grid-action-icon grid-action-logs text-muted-foreground hover:text-blue-500" />
 								</button>
 							{/if}
-							{#if source.sourceType !== 'git' && source.sourceType !== 'external' && $canAccess('stacks', 'start')}
+							{#if composeMutationsAllowed && source.sourceType !== 'git' && source.sourceType !== 'external' && $canAccess('stacks', 'start')}
 								<RedeployPopover
 									stackName={stack.name}
 									{envId}
@@ -2065,11 +2101,11 @@
 									{/snippet}
 								</RedeployPopover>
 							{/if}
-							{#if stackActionLoading === stack.name}
+							{#if composeMutationsAllowed && stackActionLoading === stack.name}
 								<div class="p-1">
 									<Loader2 class="grid-action-icon animate-spin text-muted-foreground" />
 								</div>
-							{:else if stack.status !== 'running' && stack.status !== 'partial' && stack.status !== 'restarting'}
+							{:else if composeMutationsAllowed && stack.status !== 'running' && stack.status !== 'partial' && stack.status !== 'restarting'}
 								{#if $canAccess('stacks', 'start')}
 									<button
 										type="button"
@@ -2080,7 +2116,7 @@
 										<Play class="grid-action-icon grid-action-start text-muted-foreground hover:text-green-500" />
 									</button>
 								{/if}
-							{:else}
+							{:else if composeMutationsAllowed}
 								{#if $canAccess('stacks', 'restart')}
 									<Popover.Root open={restartPopoverOpen[stack.name] ?? false} onOpenChange={(v) => restartPopoverOpen[stack.name] = v}>
 										<Popover.Trigger asChild>
@@ -2133,7 +2169,7 @@
 								{/if}
 							{/if}
 						{/if}
-						{#if $canAccess('stacks', 'stop') && stack.status !== 'created' && stack.status !== 'not deployed'}
+						{#if composeMutationsAllowed && $canAccess('stacks', 'stop') && stack.status !== 'created' && stack.status !== 'not deployed'}
 							<ConfirmPopover
 								open={confirmDownName === stack.name}
 								action="Down"
@@ -2148,7 +2184,7 @@
 								{/snippet}
 							</ConfirmPopover>
 						{/if}
-						{#if $canAccess('stacks', 'remove')}
+						{#if composeMutationsAllowed && $canAccess('stacks', 'remove')}
 							<button
 								type="button"
 								title="Remove"
@@ -2653,13 +2689,15 @@
 	{/if}
 </div>
 
-<!-- Create Stack Modal -->
-<StackModal
-	bind:open={showCreateModal}
-	mode="create"
-	onClose={() => showCreateModal = false}
-	onSuccess={fetchStacks}
-/>
+{#if composeMutationsAllowed}
+	<!-- Mutation dialogs are not mounted until standalone capability is current and confirmed. -->
+	<StackModal
+		bind:open={showCreateModal}
+		mode="create"
+		onClose={() => showCreateModal = false}
+		onSuccess={fetchStacks}
+	/>
+{/if}
 
 <!-- Edit Stack Modal -->
 <StackModal
@@ -2677,31 +2715,33 @@
 	onSuccess={fetchStacks}
 />
 
-<GitStackModal
-	bind:open={showGitModal}
-	gitStack={editingGitStack}
-	environmentId={envId}
-	repositories={gitRepositories}
-	credentials={gitCredentials}
-	onClose={() => {
-		showGitModal = false;
-		editingGitStack = null;
-	}}
-	onSaved={fetchStacks}
-/>
+{#if composeMutationsAllowed}
+	<GitStackModal
+		bind:open={showGitModal}
+		gitStack={editingGitStack}
+		environmentId={envId}
+		repositories={gitRepositories}
+		credentials={gitCredentials}
+		onClose={() => {
+			showGitModal = false;
+			editingGitStack = null;
+		}}
+		onSaved={fetchStacks}
+	/>
 
-<ImportStackModal
-	bind:open={showImportModal}
-	onClose={() => showImportModal = false}
-	onAdopted={fetchStacks}
-/>
+	<ImportStackModal
+		bind:open={showImportModal}
+		onClose={() => showImportModal = false}
+		onAdopted={fetchStacks}
+	/>
 
-<DeleteStackModal
-	bind:open={showDeleteModal}
-	stackName={deleteStackName}
-	envId={envId ?? null}
-	onConfirm={(opts) => removeStack(deleteStackName, opts)}
-/>
+	<DeleteStackModal
+		bind:open={showDeleteModal}
+		stackName={deleteStackName}
+		envId={envId ?? null}
+		onConfirm={(opts) => removeStack(deleteStackName, opts)}
+	/>
+{/if}
 
 <ContainerInspectModal
 	bind:open={showInspectModal}
@@ -2733,17 +2773,19 @@
 	{envId}
 />
 
-<BatchOperationModal
-	bind:open={showBatchOpModal}
-	title={batchOpTitle}
-	operation={batchOpOperation}
-	entityType="stacks"
-	items={batchOpItems}
-	envId={envId ?? undefined}
-	options={{ force: true }}
-	onClose={() => showBatchOpModal = false}
-	onComplete={handleBatchComplete}
-/>
+{#if composeMutationsAllowed}
+	<BatchOperationModal
+		bind:open={showBatchOpModal}
+		title={batchOpTitle}
+		operation={batchOpOperation}
+		entityType="stacks"
+		items={batchOpItems}
+		envId={envId ?? undefined}
+		options={{ force: true }}
+		onClose={() => showBatchOpModal = false}
+		onComplete={handleBatchComplete}
+	/>
+{/if}
 
 {#if errorDialogData}
 	<ErrorDialog

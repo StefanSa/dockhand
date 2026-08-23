@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	parseSwarmCapability,
-	unknownSwarmCapability
+	unknownSwarmCapability,
+	isSwarmEnvironment
 } from '../src/lib/types/swarm';
 
 const detectedAt = '2026-08-22T00:00:00.000Z';
@@ -78,5 +79,12 @@ describe('parseSwarmCapability', () => {
 		const capability = unknownSwarmCapability(new Error('connection refused'), detectedAt);
 		assert.equal(capability.kind, 'unknown');
 		assert.equal(capability.error, 'connection refused');
+	});
+
+	it('shows Swarm navigation for managers and workers, but not standalone Docker', () => {
+		assert.equal(isSwarmEnvironment({ kind: 'swarm-manager', detectedAt }), true);
+		assert.equal(isSwarmEnvironment({ kind: 'swarm-worker', detectedAt }), true);
+		assert.equal(isSwarmEnvironment({ kind: 'standalone', detectedAt }), false);
+		assert.equal(isSwarmEnvironment(null), false);
 	});
 });

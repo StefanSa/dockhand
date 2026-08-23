@@ -5,6 +5,7 @@ import { deployGitStack } from '$lib/server/git';
 import { authorize } from '$lib/server/authorize';
 import { auditGitStack } from '$lib/server/audit';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -14,6 +15,7 @@ import { createJobResponse } from '$lib/server/sse';
  * resp-200-desc: An SSE stream whose final `result` event carries {success, error}
  * resp-403: Caller lacks the stacks:start permission for the stack's environment
  * resp-404: No git stack exists with that ID
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to start the deployment
  */
 export const POST: RequestHandler = async (event) => {
@@ -31,6 +33,9 @@ export const POST: RequestHandler = async (event) => {
 		if (auth.authEnabled && !await auth.can('stacks', 'start', gitStack.environmentId || undefined)) {
 			return json({ error: 'Permission denied' }, { status: 403 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(gitStack.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		return createJobResponse(async (send) => {
 			try {

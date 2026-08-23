@@ -34,6 +34,7 @@ import {
 	type DeletionSkip,
 	type SyncManifest
 } from './git-deletions';
+import { requireComposeMutationCapability } from './compose-capability';
 
 const MERGED_CA_BUNDLE_PATH = '/tmp/dockhand-merged-ca-bundle.crt';
 let mergedCaBundleReady = false;
@@ -756,6 +757,7 @@ export async function deployFromRepository(repoId: number): Promise<{ success: b
 	if (!repo) {
 		return { success: false, error: 'Repository not found' };
 	}
+	await requireComposeMutationCapability(repo.environmentId);
 
 	// Sync first
 	const syncResult = await syncRepository(repoId);
@@ -877,6 +879,7 @@ export async function syncGitStack(stackId: number): Promise<SyncResult> {
 	if (!gitStack) {
 		return { success: false, error: 'Git stack not found' };
 	}
+	await requireComposeMutationCapability(gitStack.environmentId);
 
 	const logPrefix = `[Stack:${gitStack.stackName}]`;
 	console.log(`${logPrefix} ========================================`);
@@ -1355,6 +1358,7 @@ export async function deployGitStackWithProgress(
 		onProgress({ status: 'error', error: 'Git stack not found' });
 		return { success: false, error: 'Git stack not found' };
 	}
+	await requireComposeMutationCapability(gitStack.environmentId);
 
 	// Check if sync is already in progress
 	if (gitStack.syncStatus === 'syncing') {

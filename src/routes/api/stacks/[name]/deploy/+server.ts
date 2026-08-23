@@ -3,6 +3,7 @@ import { deployStack, requireComposeFile, ComposeFileNotFoundError } from '$lib/
 import { authorize } from '$lib/server/authorize';
 import { auditStack } from '$lib/server/audit';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 import type { RequestHandler } from './$types';
 
 /**
@@ -14,6 +15,7 @@ import type { RequestHandler } from './$types';
  * body-example: {"pull":true,"build":false,"forceRecreate":false}
  * resp-200: Server-Sent-Events job stream with progress events and a final result event ({success, output})
  * resp-403: Permission denied (requires stacks:start, or environment access denied on enterprise)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  */
 export const POST: RequestHandler = async (event) => {
 	const { params, url, cookies, request } = event;
@@ -31,6 +33,8 @@ export const POST: RequestHandler = async (event) => {
 	if (envIdNum && auth.isEnterprise && !(await auth.canAccessEnvironment(envIdNum))) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	const body = await request.json().catch(() => ({}));
 	const { pull, build, forceRecreate } = body as {

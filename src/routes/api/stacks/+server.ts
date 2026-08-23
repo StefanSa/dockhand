@@ -5,6 +5,7 @@ import { upsertStackSource, getStackSources } from '$lib/server/db';
 import { authorize } from '$lib/server/authorize';
 import { auditStack } from '$lib/server/audit';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 import type { RequestHandler } from './$types';
 
 /**
@@ -89,6 +90,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
  * body: {name:string!, compose:string!, composePath:string, envPath:string, envVars:array<object>, rawEnvContent:string, secretProviderId:integer, start:boolean}
  * resp-400: Invalid request (e.g. missing name/compose, or secretProviderId wrong type)
  * resp-403: Permission denied (needs stacks:create; binding a secret provider also needs secrets:view)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to create or deploy the stack
  */
 export const POST: RequestHandler = async (event) => {
@@ -107,6 +109,8 @@ export const POST: RequestHandler = async (event) => {
 	if (envIdNum && auth.isEnterprise && !(await auth.canAccessEnvironment(envIdNum))) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	try {
 		const body = await request.json();

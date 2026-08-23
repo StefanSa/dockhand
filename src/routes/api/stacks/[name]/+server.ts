@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import { removeStack, ComposeFileNotFoundError } from '$lib/server/stacks';
 import { authorize } from '$lib/server/authorize';
 import { auditStack } from '$lib/server/audit';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 import type { RequestHandler } from './$types';
 
 /**
@@ -17,6 +18,7 @@ import type { RequestHandler } from './$types';
  * resp-400: Compose down failed and force was not set
  * resp-403: Permission denied, or access denied to this environment
  * resp-404: Compose file not found for this stack
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Unexpected error while removing the stack
  */
 export const DELETE: RequestHandler = async (event) => {
@@ -40,6 +42,8 @@ export const DELETE: RequestHandler = async (event) => {
 	if (envIdNum && auth.isEnterprise && !(await auth.canAccessEnvironment(envIdNum))) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	try {
 		const stackName = decodeURIComponent(params.name);

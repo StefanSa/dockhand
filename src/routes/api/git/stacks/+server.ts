@@ -15,6 +15,7 @@ import { authorize } from '$lib/server/authorize';
 import { registerSchedule } from '$lib/server/scheduler';
 import { auditGitStack } from '$lib/server/audit';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 // Stack name validation: Docker Compose requires lowercase; must start with a
 // letter or number, and contain only lowercase letters, numbers, hyphens, underscores
@@ -54,7 +55,7 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
  * body: {stackName:string!, environmentId:integer, repositoryId:integer, secretProviderId:integer, webhookEnabled:boolean, webhookSecret:string}
  * resp-400: Invalid stack name, or secretProviderId is not a number/null
  * resp-403: Permission denied (needs stacks:create; binding a secret provider also needs secrets:view)
- * resp-409: A git stack with this name already exists in the environment
+ * resp-409: A git stack with this name already exists, or the environment is not standalone Docker
  * resp-500: Failed to create the git stack
  */
 export const POST: RequestHandler = async (event) => {
@@ -68,6 +69,8 @@ export const POST: RequestHandler = async (event) => {
 		if (auth.authEnabled && !await auth.can('stacks', 'create', data.environmentId || undefined)) {
 			return json({ error: 'Permission denied' }, { status: 403 });
 		}
+		const capabilityConflict = await composeMutationGuardResponse(data.environmentId);
+		if (capabilityConflict) return capabilityConflict;
 
 		if (!data.stackName || typeof data.stackName !== 'string') {
 			return json({ error: 'Stack name is required' }, { status: 400 });

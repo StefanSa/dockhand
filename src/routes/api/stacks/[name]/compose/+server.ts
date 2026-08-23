@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { getStackComposeFile, deployStack, saveStackComposeFile } from '$lib/server/stacks';
 import { authorize } from '$lib/server/authorize';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 // GET /api/stacks/[name]/compose - Get compose file content
 /**
@@ -60,6 +61,7 @@ export const GET: RequestHandler = async ({ params, url, cookies }) => {
  * body: {content:string!, composePath:string, envPath:string, oldComposePath:string, oldEnvPath:string, moveFromDir:string, restart:boolean, secretProviderId:integer}
  * resp-400: Invalid request (e.g. missing content, or secretProviderId wrong type)
  * resp-403: Permission denied (needs stacks:edit; binding a secret provider also needs secrets:view)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to save or deploy the compose file
  */
 export const PUT: RequestHandler = async ({ params, request, url, cookies }) => {
@@ -73,6 +75,8 @@ export const PUT: RequestHandler = async ({ params, request, url, cookies }) => 
 	if (auth.authEnabled && !(await auth.can('stacks', 'edit', envIdNum))) {
 		return json({ error: 'Permission denied' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	try {
 		const body = await request.json();

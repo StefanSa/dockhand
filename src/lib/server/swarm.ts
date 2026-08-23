@@ -26,7 +26,7 @@ interface CapabilityCacheEntry {
 	expiresAt: number;
 }
 
-const capabilityCache = new Map<number, CapabilityCacheEntry>();
+const capabilityCache = new Map<number | null, CapabilityCacheEntry>();
 
 function withTimeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -46,8 +46,9 @@ export function clearSwarmCapabilityCache(environmentId?: number): void {
 	capabilityCache.delete(environmentId);
 }
 
-export async function getSwarmCapability(environmentId: number, refresh = false): Promise<SwarmCapability> {
-	const cached = capabilityCache.get(environmentId);
+export async function getSwarmCapability(environmentId?: number | null, refresh = false): Promise<SwarmCapability> {
+	const cacheKey = environmentId ?? null;
+	const cached = capabilityCache.get(cacheKey);
 	if (!refresh && cached && cached.expiresAt > Date.now()) return cached.capability;
 
 	let capability: SwarmCapability;
@@ -64,7 +65,7 @@ export async function getSwarmCapability(environmentId: number, refresh = false)
 		capability = unknownSwarmCapability(message);
 	}
 
-	capabilityCache.set(environmentId, {
+	capabilityCache.set(cacheKey, {
 		capability,
 		expiresAt: Date.now() + (capability.kind === 'unknown' ? UNKNOWN_CACHE_TTL_MS : CAPABILITY_CACHE_TTL_MS)
 	});

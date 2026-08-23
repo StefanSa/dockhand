@@ -5,6 +5,7 @@ import { authorize } from '$lib/server/authorize';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import type { RequestHandler } from './$types';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * Parse a .env file content into key-value pairs
@@ -57,7 +58,6 @@ export const GET: RequestHandler = async ({ params, url, cookies }) => {
 	if (envIdNum && auth.isEnterprise && !await auth.canAccessEnvironment(envIdNum)) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
-
 	try {
 		const stackName = decodeURIComponent(params.name);
 
@@ -151,6 +151,7 @@ export const GET: RequestHandler = async ({ params, url, cookies }) => {
  * body: {variables:array<object>!}
  * resp-400: Invalid variables payload
  * resp-403: Permission denied (needs stacks:edit)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to save env vars
  */
 export const PUT: RequestHandler = async ({ params, url, cookies, request }) => {
@@ -167,6 +168,8 @@ export const PUT: RequestHandler = async ({ params, url, cookies, request }) => 
 	if (envIdNum && auth.isEnterprise && !await auth.canAccessEnvironment(envIdNum)) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
 	}
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	try {
 		const stackName = decodeURIComponent(params.name);

@@ -7,6 +7,7 @@ import { registerSchedule, unregisterSchedule } from '$lib/server/scheduler';
 import { auditGitStack } from '$lib/server/audit';
 import { computeAuditDiff } from '$lib/utils/diff';
 import { createJobResponse } from '$lib/server/sse';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 // Stack name validation: must start with alphanumeric, can contain alphanumeric, hyphens, underscores
 const STACK_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
@@ -49,6 +50,7 @@ export const GET: RequestHandler = async ({ params, cookies }) => {
  * resp-400: Invalid stack name, or secretProviderId is not a number/null
  * resp-403: Permission denied (needs stacks:edit; binding a secret provider also needs secrets:view)
  * resp-404: Git stack not found
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to update the git stack
  */
 export const PUT: RequestHandler = async (event) => {
@@ -66,6 +68,9 @@ export const PUT: RequestHandler = async (event) => {
 		if (auth.authEnabled && !await auth.can('stacks', 'edit', existing.environmentId || undefined)) {
 			return json({ error: 'Permission denied' }, { status: 403 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(existing.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		const data = await request.json();
 
@@ -228,6 +233,7 @@ export const PUT: RequestHandler = async (event) => {
  * path: id:integer The git stack id
  * resp-403: Permission denied (needs stacks:delete)
  * resp-404: Git stack not found
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to delete the git stack
  */
 export const DELETE: RequestHandler = async (event) => {
@@ -245,6 +251,9 @@ export const DELETE: RequestHandler = async (event) => {
 		if (auth.authEnabled && !await auth.can('stacks', 'remove', existing.environmentId || undefined)) {
 			return json({ error: 'Permission denied' }, { status: 403 });
 		}
+
+		const capabilityConflict = await composeMutationGuardResponse(existing.environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		// Unregister schedule from croner
 		unregisterSchedule(id, 'git_stack_sync');

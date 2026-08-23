@@ -50,6 +50,7 @@ import { cleanPem } from '$lib/utils/pem';
 import { rewriteComposeVolumePaths, getHostDataDir } from './host-path';
 import { getOrderValue } from './container-labels';
 import { pendingRowsToClear } from './pending-updates-core';
+import { requireComposeMutationCapability } from './compose-capability';
 
 // =============================================================================
 // TYPES
@@ -2225,6 +2226,7 @@ export async function redeployStackFromDir(
 	composeFileName: string,
 	envId?: number | null
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const composePath = join(stackDir, composeFileName);
 	if (!existsSync(composePath)) {
 		throw new Error(`compose file "${composeFileName}" not found in restored stack dir`);
@@ -2286,6 +2288,7 @@ export async function startStack(
 	stackName: string,
 	envId?: number | null
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId);
 
 	if (!result.success) {
@@ -2331,6 +2334,7 @@ export async function stopStack(
 	stackName: string,
 	envId?: number | null
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId);
 
 	if (!result.success) {
@@ -2376,6 +2380,7 @@ export async function restartStack(
 	envId?: number | null,
 	mode: 'restart' | 'recreate' = 'restart'
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId);
 
 	if (!result.success) {
@@ -2417,6 +2422,7 @@ export async function downStack(
 	envId?: number | null,
 	removeVolumes = false
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId);
 
 	if (!result.success) {
@@ -2525,6 +2531,7 @@ export async function removeStack(
 	removeVolumes = false,
 	deleteFiles = true
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	return withStackLock(stackName, async () => {
 		// Get compose file (may not exist for external stacks)
 		const composeResult = await getStackComposeFile(stackName, envId);
@@ -2820,6 +2827,7 @@ async function reconcileStackPendingUpdates(stackName: string, envId: number): P
  */
 export async function deployStack(options: DeployStackOptions): Promise<StackOperationResult> {
 	const { name, compose, envId, sourceDir, forceRecreate, build, noBuildCache, pullPolicy, composePath, envPath, composeFileName, envFileName, filesToDelete, isGitDeploy } = options;
+	await requireComposeMutationCapability(envId);
 	const logPrefix = `[Stack:${name}]`;
 
 	console.log(`${logPrefix} ========================================`);
@@ -3053,6 +3061,7 @@ export async function pullStackImages(
 	stackName: string,
 	envId?: number | null
 ): Promise<{ success: boolean; output?: string; error?: string }> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId);
 
 	if (!result.success) {
@@ -3086,6 +3095,7 @@ export async function pullStackService(
 	envId?: number | null,
 	composeConfigPath?: string
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId, composeConfigPath);
 
 	if (!result.success) {
@@ -3129,6 +3139,7 @@ export async function updateStackService(
 	envId?: number | null,
 	composeConfigPath?: string
 ): Promise<StackOperationResult> {
+	await requireComposeMutationCapability(envId);
 	const result = await requireComposeFile(stackName, envId, composeConfigPath);
 
 	if (!result.success) {

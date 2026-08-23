@@ -23,6 +23,7 @@ import { deleteAutoUpdateSchedule, getAutoUpdateSetting, removePendingContainerU
 import { unregisterSchedule } from '$lib/server/scheduler';
 import { prefersJSON } from '$lib/server/sse';
 import { createJob, appendLine, completeJob, failJob } from '$lib/server/jobs';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 // SSE Event types
 export type BatchEventType = 'start' | 'progress' | 'complete' | 'error';
@@ -138,6 +139,7 @@ async function processWithConcurrency<T>(
  * resp-200-example: {"jobId":"job_abc123"}
  * resp-400: Invalid JSON body, invalid entity type, invalid operation for the entity type, or empty items array
  * resp-403: Permission denied for the requested operation, or environment access denied on enterprise
+ * resp-409: A stack batch operation targeted an environment that is not standalone Docker
  */
 export const POST: RequestHandler = async ({ url, cookies, request }) => {
 	const auth = await authorize(cookies);
@@ -185,6 +187,10 @@ export const POST: RequestHandler = async ({ url, cookies, request }) => {
 	// Environment access check (enterprise only)
 	if (envIdNum && auth.isEnterprise && !(await auth.canAccessEnvironment(envIdNum))) {
 		return json({ error: 'Access denied to this environment' }, { status: 403 });
+	}
+	if (entityType === 'stacks') {
+		const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 	}
 
 	// Check if audit is needed (enterprise only)

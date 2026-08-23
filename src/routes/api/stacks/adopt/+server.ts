@@ -1,6 +1,7 @@
 import { json, type RequestHandler } from '@sveltejs/kit';
 import { authorize } from '$lib/server/authorize';
 import { adoptSelectedStacks, type DiscoveredStack } from '$lib/server/stack-scanner';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * @openapi
@@ -12,6 +13,7 @@ import { adoptSelectedStacks, type DiscoveredStack } from '$lib/server/stack-sca
  * resp-200-example: {"adopted":["web"],"failed":[]}
  * resp-400: No stacks provided, missing environmentId, or a stack is missing name/composePath
  * resp-403: Permission denied (requires stacks:create)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Unexpected error while adopting stacks
  */
 export const POST: RequestHandler = async ({ request, cookies }) => {
@@ -32,6 +34,8 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 		if (!environmentId || typeof environmentId !== 'number') {
 			return json({ error: 'Environment ID is required' }, { status: 400 });
 		}
+		const capabilityConflict = await composeMutationGuardResponse(environmentId); // Response status: 409 on capability conflict.
+		if (capabilityConflict) return capabilityConflict;
 
 		// Validate each stack has required fields
 		for (const stack of stacks) {

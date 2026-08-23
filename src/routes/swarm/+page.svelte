@@ -4,7 +4,8 @@
 
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench } from 'lucide-svelte';
+	import { page } from '$app/stores';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -25,6 +26,7 @@
 	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
 	import type { SwarmNodeSummary, SwarmReadModel, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
+	import { filterSwarmTasks, isFailedSwarmTask, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
 
 	type NodeDialogAction =
 		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
@@ -35,6 +37,8 @@
 
 	let environmentId = $state<number | null>(null);
 	let activeTab = $state('overview');
+	let taskFilter = $state<SwarmTaskFilter>('active');
+	let taskSearch = $state('');
 	let data = $state<SwarmReadModel | null>(null);
 	let loading = $state(false);
 	let refreshing = $state(false);
@@ -60,6 +64,21 @@
 	let nodeAction = $state<NodeDialogAction | null>(null);
 	let nodeActionPending = $state(false);
 	let nodeActionError = $state<string | null>(null);
+	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
+	const visibleTasks = $derived(filterSwarmTasks(
+		data?.tasks ?? [],
+		taskFilter,
+		taskSearch,
+		data?.services ?? [],
+		data?.nodes ?? []
+	));
+
+	$effect(() => {
+		const requestedTab = $page.url.searchParams.get('tab');
+		if (requestedTab && ['overview', 'nodes', 'services', 'stacks', 'tasks'].includes(requestedTab)) {
+			activeTab = requestedTab;
+		}
+	});
 
 	async function load(refresh = false): Promise<void> {
 		if (!environmentId) return;
@@ -110,6 +129,11 @@
 
 	function nodeName(nodeId: string | undefined): string {
 		return data?.nodes.find((node) => node.id === nodeId)?.hostname ?? nodeId?.slice(0, 12) ?? 'Unassigned';
+	}
+
+	function taskStateVariant(task: SwarmReadModel['tasks'][number]): 'secondary' | 'destructive' | 'outline' {
+		if (isFailedSwarmTask(task)) return 'destructive';
+		return task.state === 'running' ? 'secondary' : 'outline';
 	}
 
 	function openNodeActionDialog(node: SwarmNodeSummary, action: NodeDialogAction): void {
@@ -541,21 +565,59 @@
 			</Tabs.Content>
 
 			<Tabs.Content value="tasks" class="min-h-0 overflow-auto rounded-md border">
-				<Table.Root>
-					<Table.Header><Table.Row><Table.Head>Task</Table.Head><Table.Head>Service</Table.Head><Table.Head>Node</Table.Head><Table.Head>Desired</Table.Head><Table.Head>Current</Table.Head><Table.Head>Message</Table.Head></Table.Row></Table.Header>
-					<Table.Body>
-						{#each data.tasks as task (task.id)}
-							<Table.Row>
-								<Table.Cell><div class="font-medium">{task.name ?? task.id.slice(0, 12)}</div>{#if task.slot}<div class="text-xs text-muted-foreground">Slot {task.slot}</div>{/if}</Table.Cell>
-								<Table.Cell>{serviceName(task.serviceId)}</Table.Cell>
-								<Table.Cell>{nodeName(task.nodeId)}</Table.Cell>
-								<Table.Cell class="capitalize">{task.desiredState ?? '—'}</Table.Cell>
-								<Table.Cell><Badge variant={task.state === 'running' ? 'secondary' : 'outline'} class="capitalize">{task.state ?? 'unknown'}</Badge></Table.Cell>
-								<Table.Cell class="max-w-[28rem] text-xs"><span class={task.error ? 'text-destructive' : 'text-muted-foreground'}>{task.error || task.message || '—'}</span></Table.Cell>
-							</Table.Row>
+				<div class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background p-2">
+					<div class="flex flex-wrap items-center gap-1">
+						{#each SWARM_TASK_FILTERS as filter (filter.value)}
+							<Button
+								size="sm"
+								variant={taskFilter === filter.value ? 'secondary' : 'ghost'}
+								class="h-7 gap-1.5 px-2 text-xs"
+								onclick={() => taskFilter = filter.value}
+							>
+								{filter.label}
+								<Badge variant="outline" class="h-4 min-w-4 px-1 text-2xs">{taskCounts[filter.value]}</Badge>
+							</Button>
 						{/each}
-					</Table.Body>
-				</Table.Root>
+					</div>
+					<div class="relative ml-auto min-w-52 flex-1 sm:max-w-xs">
+						<Search class="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							type="search"
+							placeholder="Search service, node, image or task…"
+							class="h-7 pl-7 text-xs"
+							bind:value={taskSearch}
+						/>
+					</div>
+				</div>
+				{#if visibleTasks.length === 0}
+					<div class="flex min-h-32 items-center justify-center text-sm text-muted-foreground">
+						No tasks match the current filter and search.
+					</div>
+				{:else}
+					<Table.Root>
+						<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>State</Table.Head><Table.Head>Desired state</Table.Head><Table.Head>Node</Table.Head><Table.Head>Slot</Table.Head><Table.Head>Image</Table.Head></Table.Row></Table.Header>
+						<Table.Body>
+							{#each visibleTasks as task (task.id)}
+								<Table.Row>
+									<Table.Cell>
+										<div class="font-medium">{serviceName(task.serviceId)}</div>
+										<div class="text-xs text-muted-foreground">
+											{#if task.name}{task.name} · {/if}<span class="font-mono" title={task.id}>{task.id.slice(0, 12)}</span>
+										</div>
+									</Table.Cell>
+									<Table.Cell>
+										<Badge variant={taskStateVariant(task)} class="capitalize">{task.state ?? 'unknown'}</Badge>
+										{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}
+									</Table.Cell>
+									<Table.Cell><Badge variant="outline" class="capitalize">{task.desiredState ?? '—'}</Badge></Table.Cell>
+									<Table.Cell>{nodeName(task.nodeId)}</Table.Cell>
+									<Table.Cell>{task.slot ?? '—'}</Table.Cell>
+									<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={task.image}>{task.image ?? '—'}</Table.Cell>
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				{/if}
 			</Tabs.Content>
 		</Tabs.Root>
 	{:else}

@@ -24,6 +24,8 @@
 	import TemplateCard from './TemplateCard.svelte';
 	import TemplateSourcesTab from './TemplateSourcesTab.svelte';
 	import StackModal from '../stacks/StackModal.svelte';
+	import { currentEnvironment } from '$lib/stores/environment';
+	import { swarmCapability } from '$lib/stores/swarm';
 
 	// State
 	let templates = $state<TemplateItem[]>([]);
@@ -48,6 +50,15 @@
 	let showStackModal = $state(false);
 	let stackModalCompose = $state('');
 	let stackModalName = $state('');
+	const composeMutationsAllowed = $derived(
+		$swarmCapability.environmentId === ($currentEnvironment?.id ?? null) &&
+		!$swarmCapability.loading &&
+		$swarmCapability.capability?.kind === 'standalone'
+	);
+
+	$effect(() => {
+		if (!composeMutationsAllowed) showStackModal = false;
+	});
 
 	// Client-side cache
 	let cacheTimestamp = 0;
@@ -92,6 +103,7 @@
 	}
 
 	async function handleCardClick(template: TemplateItem) {
+		if (!composeMutationsAllowed) return;
 		loadingTemplateId = template.id;
 		try {
 			const response = await fetch('/api/templates/compose', {
@@ -126,6 +138,12 @@
 </script>
 
 <div class="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
+	{#if $currentEnvironment && !composeMutationsAllowed}
+		<div class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+			Template deployment is available only for a confirmed standalone Docker environment.
+			{#if $swarmCapability.capability?.kind === 'swarm-manager'}<a class="ml-1 font-medium underline underline-offset-2" href="/swarm?tab=stacks">Use Swarm Stacks</a>{:else if $swarmCapability.capability?.kind === 'swarm-worker'} Connect to a Swarm manager for stack management.{/if}
+		</div>
+	{/if}
 	<!-- Header -->
 	<div class="shrink-0 flex flex-wrap justify-between items-center gap-3 min-h-8">
 		<PageHeader icon={LibraryBig} title="Templates" count={loading ? undefined : filteredTemplates.length} showConnection={false}>
@@ -273,6 +291,7 @@
 						<TemplateCard
 							{template}
 							loading={loadingTemplateId === template.id}
+							disabled={!composeMutationsAllowed}
 							onclick={() => handleCardClick(template)}
 						/>
 					{/each}
@@ -287,15 +306,17 @@
 	{/if}
 </div>
 
-<!-- StackModal for deploying templates -->
-<StackModal
-	bind:open={showStackModal}
-	mode="create"
-	initialCompose={stackModalCompose}
-	initialStackName={stackModalName}
-	onClose={() => showStackModal = false}
-	onSuccess={() => {
-		showStackModal = false;
-		toast.success('Stack deployed from library template');
-	}}
-/>
+{#if composeMutationsAllowed}
+	<!-- StackModal for deploying templates -->
+	<StackModal
+		bind:open={showStackModal}
+		mode="create"
+		initialCompose={stackModalCompose}
+		initialStackName={stackModalName}
+		onClose={() => showStackModal = false}
+		onSuccess={() => {
+			showStackModal = false;
+			toast.success('Stack deployed from library template');
+		}}
+	/>
+{/if}

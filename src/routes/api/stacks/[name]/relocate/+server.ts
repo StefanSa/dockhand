@@ -4,6 +4,7 @@ import { authorize } from '$lib/server/authorize';
 import { getStackSource, updateStackSource } from '$lib/server/db';
 import { existsSync, readdirSync, renameSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { composeMutationGuardResponse } from '$lib/server/compose-capability';
 
 /**
  * POST /api/stacks/[name]/relocate
@@ -18,6 +19,7 @@ import { join, dirname } from 'node:path';
  * resp-200-example: {"success":true,"movedFiles":["compose.yaml",".env"],"composeContent":"services: {}","rawEnvContent":"FOO=bar\n","envVars":[{"key":"FOO","value":"bar","isSecret":false}]}
  * resp-400: oldDir and newComposePath are required, or the source directory does not exist
  * resp-403: Permission denied (requires stacks:edit)
+ * resp-409: Compose stack mutations require a standalone Docker environment
  * resp-500: Failed to relocate stack
  */
 export const POST: RequestHandler = async ({ params, request, url, cookies }) => {
@@ -29,6 +31,8 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 	const { name } = params;
 	const envId = url.searchParams.get('env');
 	const envIdNum = envId ? parseInt(envId) : undefined;
+	const capabilityConflict = await composeMutationGuardResponse(envIdNum); // Response status: 409 on capability conflict.
+	if (capabilityConflict) return capabilityConflict;
 
 	try {
 		const body = await request.json();

@@ -4871,6 +4871,9 @@
           },
           "403": {
             "description": "Permission denied for the requested operation, or environment access denied on enterprise"
+          },
+          "409": {
+            "description": "A stack batch operation targeted an environment that is not standalone Docker"
           }
         },
         "security": [
@@ -13355,6 +13358,9 @@
           "404": {
             "description": "No repository exists with that ID"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "The deployment failed"
           }
@@ -13695,7 +13701,7 @@
             "description": "Permission denied (needs stacks:create; binding a secret provider also needs secrets:view)"
           },
           "409": {
-            "description": "A git stack with this name already exists in the environment"
+            "description": "A git stack with this name already exists, or the environment is not standalone Docker"
           },
           "500": {
             "description": "Failed to create the git stack"
@@ -13823,6 +13829,9 @@
           "404": {
             "description": "Git stack not found"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "Failed to update the git stack"
           }
@@ -13893,6 +13902,9 @@
           "404": {
             "description": "Git stack not found"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "Failed to delete the git stack"
           }
@@ -13943,6 +13955,9 @@
           },
           "404": {
             "description": "No git stack exists with that ID"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "Failed to start the deployment"
@@ -14000,6 +14015,9 @@
           },
           "404": {
             "description": "No git stack exists with that ID"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -14217,6 +14235,9 @@
           "404": {
             "description": "No git stack exists with that ID"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "The sync failed"
           }
@@ -14359,6 +14380,9 @@
           "404": {
             "description": "No git stack exists with that ID"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "The deployment triggered by the webhook failed"
           }
@@ -14419,6 +14443,9 @@
           },
           "404": {
             "description": "No git stack exists with that ID"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "The deployment triggered by the webhook failed"
@@ -14489,6 +14516,9 @@
           "404": {
             "description": "No repository exists with that ID"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "The deployment triggered by the webhook failed"
           }
@@ -14545,6 +14575,9 @@
           },
           "404": {
             "description": "No repository exists with that ID"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "The deployment triggered by the webhook failed"
@@ -23655,6 +23688,9 @@
           "403": {
             "description": "Permission denied (needs stacks:create; binding a secret provider also needs secrets:view)"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "Failed to create or deploy the stack"
           }
@@ -23809,6 +23845,9 @@
           },
           "404": {
             "description": "Compose file not found for this stack"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "Unexpected error while removing the stack"
@@ -24014,6 +24053,9 @@
           "403": {
             "description": "Permission denied (needs stacks:edit; binding a secret provider also needs secrets:view)"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "Failed to save or deploy the compose file"
           }
@@ -24204,6 +24246,9 @@
           },
           "403": {
             "description": "Permission denied (requires stacks:start, or environment access denied on enterprise)"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -24293,6 +24338,9 @@
           },
           "403": {
             "description": "Permission denied, or access denied to this environment"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -24441,6 +24489,9 @@
           },
           "403": {
             "description": "Permission denied (needs stacks:edit)"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "Failed to save env vars"
@@ -24609,6 +24660,9 @@
           },
           "403": {
             "description": "Permission denied (requires stacks:edit, or environment access denied on enterprise)"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "Failed to save environment file"
@@ -24897,6 +24951,9 @@
           "403": {
             "description": "Permission denied (requires stacks:edit)"
           },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
+          },
           "500": {
             "description": "Failed to relocate stack"
           }
@@ -24983,6 +25040,9 @@
           },
           "403": {
             "description": "Permission denied (requires stacks:restart, or environment access denied on enterprise)"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -25046,6 +25106,9 @@
           },
           "403": {
             "description": "Permission denied, or access denied to this environment"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -25109,6 +25172,9 @@
           },
           "403": {
             "description": "Permission denied, or access denied to this environment"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           }
         },
         "security": [
@@ -25350,6 +25416,9 @@
           },
           "403": {
             "description": "Permission denied (requires stacks:create)"
+          },
+          "409": {
+            "description": "Compose stack mutations require a standalone Docker environment"
           },
           "500": {
             "description": "Unexpected error while adopting stacks"
