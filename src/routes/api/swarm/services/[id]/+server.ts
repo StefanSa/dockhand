@@ -9,10 +9,10 @@ import { SwarmServiceActionError, type SwarmServiceAction } from '$lib/server/sw
 
 /**
  * @openapi
- * summary: Scale or force-update an existing Swarm service on a manager environment
+ * summary: Scale, restart, or replace a Config reference on an existing Swarm service
  * path: id:string! Swarm service ID (from GET /api/swarm)
  * query: env:integer! Manager environment ID (from GET /api/environments)
- * body: {action:string!, replicas:integer}
+ * body: {action:string!, replicas:integer, sourceConfigId:string, replacementConfigId:string, replacementConfigName:string}
  * body-example: {"action":"scale","replicas":3}
  * resp-200: {success:boolean!, action:string!, version:integer!, warnings:array<string>!}
  * resp-400: Invalid action, replica count, service ID, or unsupported service mode
@@ -47,8 +47,22 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 		action = { type: 'scale', replicas: body.replicas };
 	} else if (body?.action === 'force-update') {
 		action = { type: 'force-update' };
+	} else if (body?.action === 'replace-config') {
+		const invalidSource = validateDockerIdParam(body.sourceConfigId, 'source Config');
+		if (invalidSource) return invalidSource;
+		const invalidReplacement = validateDockerIdParam(body.replacementConfigId, 'replacement Config');
+		if (invalidReplacement) return invalidReplacement;
+		if (typeof body.replacementConfigName !== 'string' || !body.replacementConfigName.trim()) {
+			return json({ error: 'A replacement Config name is required' }, { status: 400 });
+		}
+		action = {
+			type: 'replace-config',
+			sourceConfigId: body.sourceConfigId,
+			replacementConfigId: body.replacementConfigId,
+			replacementConfigName: body.replacementConfigName
+		};
 	} else {
-		return json({ error: 'Action must be scale or force-update' }, { status: 400 });
+		return json({ error: 'Action must be scale, force-update, or replace-config' }, { status: 400 });
 	}
 
 	try {

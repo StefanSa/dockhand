@@ -68,6 +68,56 @@ describe('Swarm service actions', () => {
 		assert.deepEqual(result, { action: 'force-update', version: 17, warnings: [] });
 	});
 
+	it('replaces only the selected Config reference while preserving its target and the complete Service spec', async () => {
+		const calls: Array<{ path: string; options?: RequestInit }> = [];
+		const current = service({ Replicated: { Replicas: 2 } });
+		(current.Spec as any).TaskTemplate.ContainerSpec.Configs = [
+			{ ConfigID: 'config-old', ConfigName: 'app-v1', File: { Name: '/etc/app.conf', UID: '1000', GID: '1000', Mode: 288 } },
+			{ ConfigID: 'config-other', ConfigName: 'shared', File: { Name: '/etc/shared.conf' } }
+		];
+
+		const result = await performSwarmServiceAction(manager, 'service', {
+			type: 'replace-config',
+			sourceConfigId: 'config-old',
+			replacementConfigId: 'config-new',
+			replacementConfigName: 'app-v2'
+		}, async (path, options) => {
+			calls.push({ path, options });
+			return calls.length === 1 ? current : { Warnings: ['rolling update started'] };
+		});
+
+		const updateBody = JSON.parse(String(calls[1].options?.body));
+		assert.deepEqual(updateBody.TaskTemplate.ContainerSpec.Configs, [
+			{ ConfigID: 'config-new', ConfigName: 'app-v2', File: { Name: '/etc/app.conf', UID: '1000', GID: '1000', Mode: 288 } },
+			{ ConfigID: 'config-other', ConfigName: 'shared', File: { Name: '/etc/shared.conf' } }
+		]);
+		assert.equal(updateBody.TaskTemplate.ForceUpdate, 4);
+		assert.equal(updateBody.Mode.Replicated.Replicas, 2);
+		assert.deepEqual(updateBody.Labels, { existing: 'preserved' });
+		assert.deepEqual(result, { action: 'replace-config', version: 17, warnings: ['rolling update started'] });
+	});
+
+	it('rejects a stale or duplicate Config replacement before issuing a Service update', async () => {
+		for (const configs of [
+			[{ ConfigID: 'config-other', ConfigName: 'other' }],
+			[{ ConfigID: 'config-old', ConfigName: 'old' }, { ConfigID: 'config-new', ConfigName: 'new' }]
+		]) {
+			let requests = 0;
+			await assert.rejects(
+				performSwarmServiceAction(manager, 'service', {
+					type: 'replace-config', sourceConfigId: 'config-old', replacementConfigId: 'config-new', replacementConfigName: 'new'
+				}, async () => {
+					requests++;
+					const current = service({ Replicated: { Replicas: 1 } });
+					(current.Spec as any).TaskTemplate.ContainerSpec.Configs = configs;
+					return current;
+				}),
+				(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 409
+			);
+			assert.equal(requests, 1);
+		}
+	});
+
 	for (const capability of [
 		{ ...manager, kind: 'swarm-worker', controlAvailable: false } as SwarmCapability,
 		{ ...manager, kind: 'standalone', localNodeState: 'inactive', controlAvailable: false } as SwarmCapability

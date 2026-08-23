@@ -2,7 +2,13 @@ import type { SwarmCapability } from '$lib/types/swarm';
 
 export type SwarmServiceAction =
 	| { type: 'scale'; replicas: number }
-	| { type: 'force-update' };
+	| { type: 'force-update' }
+	| {
+		type: 'replace-config';
+		sourceConfigId: string;
+		replacementConfigId: string;
+		replacementConfigName: string;
+	};
 
 export interface SwarmServiceActionResult {
 	action: SwarmServiceAction['type'];
@@ -40,6 +46,45 @@ function serviceSpec(value: unknown): Record<string, any> {
 function prepareServiceSpec(value: unknown, action: SwarmServiceAction): Record<string, any> {
 	const spec = serviceSpec(value);
 	const mode = isRecord(spec.Mode) ? spec.Mode : {};
+
+	if (action.type === 'replace-config') {
+		if (!action.sourceConfigId || !action.replacementConfigId || !action.replacementConfigName.trim()) {
+			throw new SwarmServiceActionError('Source and replacement Config metadata are required', 400);
+		}
+		if (action.sourceConfigId === action.replacementConfigId) {
+			throw new SwarmServiceActionError('Replacement Config must differ from the current Config', 400);
+		}
+		const taskTemplate = isRecord(spec.TaskTemplate) ? spec.TaskTemplate : null;
+		const containerSpec = taskTemplate && isRecord(taskTemplate.ContainerSpec)
+			? taskTemplate.ContainerSpec
+			: null;
+		const configs = containerSpec && Array.isArray(containerSpec.Configs)
+			? containerSpec.Configs
+			: [];
+		if (configs.some((config) => isRecord(config) && config.ConfigID === action.replacementConfigId)) {
+			throw new SwarmServiceActionError('Service already references the replacement Config', 409);
+		}
+		let replacements = 0;
+		const nextConfigs = configs.map((config) => {
+			if (!isRecord(config) || config.ConfigID !== action.sourceConfigId) return config;
+			replacements++;
+			return {
+				...config,
+				ConfigID: action.replacementConfigId,
+				ConfigName: action.replacementConfigName.trim()
+			};
+		});
+		if (replacements === 0) {
+			throw new SwarmServiceActionError('Service no longer references the source Config', 409);
+		}
+		return {
+			...spec,
+			TaskTemplate: {
+				...taskTemplate,
+				ContainerSpec: { ...containerSpec, Configs: nextConfigs }
+			}
+		};
+	}
 
 	if (action.type === 'scale') {
 		if (!Number.isSafeInteger(action.replicas) || action.replicas < 0) {

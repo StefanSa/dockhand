@@ -26890,7 +26890,7 @@
         "tags": [
           "swarm"
         ],
-        "summary": "Scale or force-update an existing Swarm service on a manager environment",
+        "summary": "Scale, restart, or replace a Config reference on an existing Swarm service",
         "parameters": [
           {
             "name": "id",
@@ -26989,6 +26989,15 @@
                   },
                   "replicas": {
                     "type": "integer"
+                  },
+                  "sourceConfigId": {
+                    "type": "string"
+                  },
+                  "replacementConfigId": {
+                    "type": "string"
+                  },
+                  "replacementConfigName": {
+                    "type": "string"
                   }
                 },
                 "required": [

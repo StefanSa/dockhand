@@ -88,6 +88,7 @@
 	let replaceConfigSource = $state<SwarmConfigSummary | null>(null);
 	let replacementName = $state('');
 	let replacementValue = $state('');
+	let replacementServiceIds = $state<string[]>([]);
 	let replacementConfirmed = $state(false);
 	let copiedConfigId = $state<string | null>(null);
 	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
@@ -280,6 +281,7 @@
 		replaceConfigSource = config;
 		replacementName = `${config.name}-v2`;
 		replacementValue = config.data ?? '';
+		replacementServiceIds = [];
 		replacementConfirmed = false;
 		resourceError = null;
 		replaceConfigDialogOpen = true;
@@ -291,15 +293,25 @@
 		replaceConfigSource = null;
 		replacementName = '';
 		replacementValue = '';
+		replacementServiceIds = [];
 		replacementConfirmed = false;
 		resourceError = null;
+	}
+
+	function setReplacementService(serviceId: string, checked: boolean): void {
+		replacementServiceIds = checked
+			? [...new Set([...replacementServiceIds, serviceId])]
+			: replacementServiceIds.filter((id) => id !== serviceId);
 	}
 
 	async function createConfigReplacement(): Promise<void> {
 		if (!environmentId || !replaceConfigSource || resourcePending || !replacementConfirmed || !replacementName.trim()) return;
 		let plan;
 		try {
-			plan = planSwarmConfigReplacement(replaceConfigSource, replacementName, replacementValue, replacementConfirmed);
+			plan = planSwarmConfigReplacement(replaceConfigSource, replacementName, replacementValue, {
+				serviceIds: replacementServiceIds,
+				confirmed: replacementConfirmed
+			});
 		} catch (planError) {
 			resourceError = planError instanceof Error ? planError.message : 'Invalid replacement Config';
 			return;
@@ -314,10 +326,35 @@
 			});
 			const body = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(body.error || 'Failed to create replacement Config');
+
+			const selectedUsages = replaceConfigSource.services.filter((usage) => plan.serviceIdsToUpdate.includes(usage.serviceId));
+			const updatedServices: string[] = [];
+			const failedServices: string[] = [];
+			for (const usage of selectedUsages) {
+				const updateResponse = await fetch(`/api/swarm/services/${encodeURIComponent(usage.serviceId)}?env=${environmentId}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						action: 'replace-config',
+						sourceConfigId: plan.sourceId,
+						replacementConfigId: body.id,
+						replacementConfigName: body.name
+					})
+				});
+				if (updateResponse.ok) updatedServices.push(usage.serviceName);
+				else failedServices.push(usage.serviceName);
+			}
+
 			replaceConfigDialogOpen = false;
 			replaceConfigSource = null;
 			replacementValue = '';
-			toast.success(`Replacement Config ${body.name} created; existing references were left unchanged`);
+			replacementServiceIds = [];
+			toast.success(updatedServices.length
+				? `Updated Config ${body.name} created and applied to ${updatedServices.length} Service${updatedServices.length === 1 ? '' : 's'}`
+				: `Updated Config ${body.name} created; existing references were left unchanged`);
+			if (failedServices.length) {
+				toast.warning(`Config created, but ${failedServices.join(', ')} could not be updated. Their existing references remain unchanged.`);
+			}
 			await load(true);
 			await goto(detailHref('config', body.id), { noScroll: true });
 		} catch (replaceFailure) {
@@ -782,8 +819,29 @@
 								<div><span class="text-muted-foreground">Stack</span><p>{#if selectedService.stackName}<a class="font-medium text-primary hover:underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a>{:else}Standalone service{/if}</p></div>
 								<div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedService.updatedAt)}</p></div>
 							</div>
-							<div class="grid gap-4 lg:grid-cols-3">
-								<div><h3 class="mb-2 text-sm font-medium">Tasks ({selectedServiceTasks.length})</h3><div class="flex flex-wrap gap-1">{#each selectedServiceTasks as task (task.id)}<a href={detailHref('task', task.id)}><Badge variant={taskStateVariant(task)}>{task.slot ?? task.id.slice(0, 8)} · {task.state ?? 'unknown'}</Badge></a>{:else}<span class="text-sm text-muted-foreground">No tasks</span>{/each}</div></div>
+							<div>
+								<h3 class="mb-2 text-sm font-medium">Tasks ({selectedServiceTasks.length})</h3>
+								<div class="max-h-80 overflow-auto rounded-md border">
+									<Table.Root>
+										<Table.Header><Table.Row><Table.Head>Task</Table.Head><Table.Head>State</Table.Head><Table.Head>Desired</Table.Head><Table.Head>Node</Table.Head><Table.Head>Slot</Table.Head><Table.Head>Image</Table.Head></Table.Row></Table.Header>
+										<Table.Body>
+											{#each selectedServiceTasks as task (task.id)}
+												<Table.Row>
+													<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('task', task.id)}>{task.name ?? `Task ${task.id.slice(0, 12)}`}</a><div class="font-mono text-xs text-muted-foreground">{task.id.slice(0, 12)}</div></Table.Cell>
+													<Table.Cell><Badge variant={taskStateVariant(task)} class="capitalize">{task.state ?? 'unknown'}</Badge>{#if task.error || task.message}<div class="mt-1 max-w-64 truncate text-xs {task.error ? 'text-destructive' : 'text-muted-foreground'}" title={task.error || task.message}>{task.error || task.message}</div>{/if}</Table.Cell>
+													<Table.Cell class="capitalize">{task.desiredState ?? '—'}</Table.Cell>
+													<Table.Cell>{#if task.nodeId}<a class="font-medium text-primary hover:underline" href={detailHref('node', task.nodeId)}>{nodeName(task.nodeId)}</a>{:else}—{/if}</Table.Cell>
+													<Table.Cell>{task.slot ?? '—'}</Table.Cell>
+													<Table.Cell class="max-w-72 truncate font-mono text-xs" title={task.image}>{task.image ?? '—'}</Table.Cell>
+												</Table.Row>
+											{:else}
+												<Table.Row><Table.Cell colspan={6} class="py-8 text-center text-muted-foreground">No tasks</Table.Cell></Table.Row>
+											{/each}
+										</Table.Body>
+									</Table.Root>
+								</div>
+							</div>
+							<div class="grid gap-4 lg:grid-cols-2">
 								<div><h3 class="mb-2 text-sm font-medium">Configs ({selectedService.configs.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.configs as config (config.id)}<a href={detailHref('config', config.id)}><Badge variant="outline">{config.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
 								<div><h3 class="mb-2 text-sm font-medium">Secrets ({selectedService.secrets.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.secrets as secret (secret.id)}<a href={detailHref('secret', secret.id)}><Badge variant="outline">{secret.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
 							</div>
@@ -806,10 +864,10 @@
 				{:else if selectedStack}
 					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedStack.name}</Card.Title><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={healthVariant(service.healthState)}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
 				{:else if selectedConfig}
-					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedConfig.name}</Card.Title><Card.Description class="font-mono break-all">{selectedConfig.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('config', selectedConfig)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="outline" onclick={() => openReplaceConfigDialog(selectedConfig)}><Plus class="h-4 w-4" /> Create replacement</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('config', selectedConfig)} disabled={selectedConfig.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedConfig.name}</Card.Title><Card.Description class="font-mono break-all">{selectedConfig.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('config', selectedConfig)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="outline" onclick={() => openReplaceConfigDialog(selectedConfig)}><Pencil class="h-4 w-4" /> Edit Config</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('config', selectedConfig)} disabled={selectedConfig.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
 						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Created</span><p>{formatDate(selectedConfig.createdAt)}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedConfig.updatedAt)}</p></div><div><span class="text-muted-foreground">Version</span><p>{selectedConfig.version}</p></div><div><span class="text-muted-foreground">Stacks</span><p>{#each selectedConfig.stackNames as stack, index (stack)}{#if index}, {/if}<a class="font-medium text-primary hover:underline" href={detailHref('stack', stack)}>{stack}</a>{:else}None derived{/each}</p></div></div>
 						<div class="grid gap-4 lg:grid-cols-2"><div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedConfig.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{:else}<span class="text-sm text-muted-foreground">No labels</span>{/each}</div></div><div><h3 class="mb-2 text-sm font-medium">Used by Services</h3><div class="flex flex-wrap gap-1">{#each selectedConfig.services as usage (usage.serviceId)}<a href={detailHref('service', usage.serviceId)}><Badge variant="outline">{usage.serviceName}</Badge></a>{:else}<span class="text-sm text-muted-foreground">Unused</span>{/each}</div></div></div>
-						<div><div class="mb-2 flex items-center justify-between gap-2"><div><h3 class="text-sm font-medium">Config data</h3><p class="text-xs text-muted-foreground">Immutable. Use Create replacement to change content safely.</p></div><Button size="sm" variant="outline" onclick={() => copyConfigData(selectedConfig)} disabled={selectedConfig.data === undefined}>{#if copiedConfigId === selectedConfig.id}<Check class="h-4 w-4" /> Copied{:else}<Copy class="h-4 w-4" /> Copy{/if}</Button></div>{#if selectedConfig.data !== undefined}<pre class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs">{selectedConfig.data}</pre>{:else}<Alert.Root><TriangleAlert class="h-4 w-4" /><Alert.Description>Config data was not returned by this manager endpoint.</Alert.Description></Alert.Root>{/if}</div>
+						<div><div class="mb-2 flex items-center justify-between gap-2"><div><h3 class="text-sm font-medium">Config data</h3><p class="text-xs text-muted-foreground">Docker Config data is immutable. Edit Config creates an updated Config and lets you choose which Service references move to it.</p></div><Button size="sm" variant="outline" onclick={() => copyConfigData(selectedConfig)} disabled={selectedConfig.data === undefined}>{#if copiedConfigId === selectedConfig.id}<Check class="h-4 w-4" /> Copied{:else}<Copy class="h-4 w-4" /> Copy{/if}</Button></div>{#if selectedConfig.data !== undefined}<pre class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-muted/30 p-3 font-mono text-xs">{selectedConfig.data}</pre>{:else}<Alert.Root><TriangleAlert class="h-4 w-4" /><Alert.Description>Config data was not returned by this manager endpoint.</Alert.Description></Alert.Root>{/if}</div>
 					</Card.Content></Card.Root>
 				{:else if selectedSecret}
 					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedSecret.name}</Card.Title><Card.Description class="font-mono break-all">{selectedSecret.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('secret', selectedSecret)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('secret', selectedSecret)} disabled={selectedSecret.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
@@ -871,6 +929,7 @@
 				</Table.Root>
 			</Tabs.Content>
 
+			{#if !selectedService}
 			<Tabs.Content value="services" class="min-h-0 overflow-auto rounded-md border">
 				<Table.Root>
 					<Table.Header><Table.Row><Table.Head>Service</Table.Head><Table.Head>Image</Table.Head><Table.Head>Mode</Table.Head><Table.Head>Replicas</Table.Head><Table.Head>Health / update</Table.Head><Table.Head>Placement</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
@@ -904,6 +963,7 @@
 					</Table.Body>
 				</Table.Root>
 			</Tabs.Content>
+			{/if}
 
 			<Tabs.Content value="stacks" class="min-h-0 overflow-auto rounded-md border">
 				{#if data.stacks.length === 0}
@@ -1170,32 +1230,42 @@
 </Dialog.Root>
 
 <Dialog.Root bind:open={replaceConfigDialogOpen} onOpenChange={(open) => { if (!open) closeReplaceConfigDialog(); }}>
-	<Dialog.Content class="flex h-[min(85vh,48rem)] max-w-3xl flex-col">
+	<Dialog.Content class="flex h-[min(90vh,52rem)] max-w-3xl flex-col">
 		<Dialog.Header>
-			<Dialog.Title>Create replacement for “{replaceConfigSource?.name}”</Dialog.Title>
+			<Dialog.Title>Edit Config “{replaceConfigSource?.name}”</Dialog.Title>
 			<Dialog.Description>
-				Docker Config data is immutable. This creates a new Config and deliberately leaves every existing Service and Stack reference on the current Config.
+				Docker Config data cannot change in place. Dockhand will create an updated Config and change only the Service references you explicitly select below.
 			</Dialog.Description>
 		</Dialog.Header>
 		<div class="space-y-2">
-			<Label for="swarm-replacement-name">New Config name</Label>
+			<Label for="swarm-replacement-name">Updated Config name</Label>
 			<Input id="swarm-replacement-name" bind:value={replacementName} disabled={resourcePending} autocomplete="off" />
 		</div>
 		<div class="mt-3 min-h-0 flex-1 space-y-2">
-			<Label for="swarm-replacement-data">New Config data</Label>
+			<Label for="swarm-replacement-data">Config data</Label>
 			<Textarea id="swarm-replacement-data" class="h-[calc(100%-1.75rem)] min-h-48 font-mono text-xs" bind:value={replacementValue} disabled={resourcePending} />
+		</div>
+		<div class="mt-3 space-y-2">
+			<div><h3 class="text-sm font-medium">Update Service references</h3><p class="text-xs text-muted-foreground">Unchecked Services keep using {replaceConfigSource?.name}. Updating a Service starts Docker's configured rolling update.</p></div>
+			<div class="max-h-36 space-y-2 overflow-auto rounded-md border p-3">
+				{#each replaceConfigSource?.services ?? [] as usage (usage.serviceId)}
+					<label class="flex items-start gap-3 text-sm">
+						<Checkbox checked={replacementServiceIds.includes(usage.serviceId)} onCheckedChange={(checked) => setReplacementService(usage.serviceId, checked === true)} disabled={resourcePending} />
+						<span class="min-w-0"><span class="font-medium">{usage.serviceName}</span>{#if usage.stackName}<span class="ml-2 text-xs text-muted-foreground">Stack: <a class="text-primary hover:underline" href={detailHref('stack', usage.stackName)}>{usage.stackName}</a></span><br /><span class="text-xs text-amber-600 dark:text-amber-400">This changes the live Service only. Update and redeploy the stored Stack definition before its next deployment.</span>{/if}</span>
+					</label>
+				{:else}
+					<p class="text-sm text-muted-foreground">This Config is not currently used by a Service.</p>
+				{/each}
+			</div>
 		</div>
 		<label class="mt-3 flex items-start gap-3 rounded-md border p-3 text-sm">
 			<Checkbox bind:checked={replacementConfirmed} disabled={resourcePending} />
-			<span><strong>I understand existing references will not change.</strong><br /><span class="text-muted-foreground">After creation, update the linked Service or the stored Stack file explicitly, verify rollout, then remove the old Config.</span></span>
+			<span><strong>Apply only the choices shown above.</strong><br /><span class="text-muted-foreground">Dockhand creates a new Config. Unchecked references and stored Stack definitions remain unchanged.</span></span>
 		</label>
-		{#if replaceConfigSource?.services.length}
-			<p class="text-xs text-muted-foreground">Current users: {replaceConfigSource.services.map((usage) => usage.serviceName).join(', ')}</p>
-		{/if}
 		{#if resourceError}<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{resourceError}</Alert.Description></Alert.Root>{/if}
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeReplaceConfigDialog} disabled={resourcePending}>Cancel</Button>
-			<Button onclick={createConfigReplacement} disabled={resourcePending || !replacementName.trim() || !replacementConfirmed}>{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}Create replacement</Button>
+			<Button onclick={createConfigReplacement} disabled={resourcePending || !replacementName.trim() || !replacementConfirmed}>{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}Save as updated Config</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
