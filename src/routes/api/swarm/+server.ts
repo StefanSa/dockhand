@@ -7,10 +7,10 @@ import { requireSwarmReadAccess } from '$lib/server/swarm-access';
 
 /**
  * @openapi
- * summary: Get a read-only Swarm overview with cluster, node, service, and task data
+ * summary: Get a read-only Swarm overview including config and secret metadata
  * query: env:integer! Environment id (from GET /api/environments)
  * query: refresh:boolean Refresh the environment capability before reading Swarm data
- * resp-200: {capability:{}, managerEndpointRequired:boolean!, cluster:{}, nodes:array, services:array, tasks:array}
+ * resp-200: {capability:{}, managerEndpointRequired:boolean!, cluster:{}, nodes:array, services:array, tasks:array, stacks:array, configs:array, secrets:array}
  * resp-400: A valid environment ID is required
  * resp-403: Permission denied, or no access to this environment
  * resp-404: Environment not found

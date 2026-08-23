@@ -82,6 +82,27 @@ export interface SwarmServiceSummary {
 	updatedAt?: string;
 }
 
+export interface SwarmResourceUsage {
+	serviceId: string;
+	serviceName: string;
+}
+
+export interface SwarmConfigSummary {
+	id: string;
+	name: string;
+	createdAt?: string;
+	updatedAt?: string;
+	services: SwarmResourceUsage[];
+}
+
+export interface SwarmSecretSummary {
+	id: string;
+	name: string;
+	createdAt?: string;
+	updatedAt?: string;
+	services: SwarmResourceUsage[];
+}
+
 export interface SwarmStackSummary {
 	name: string;
 	services: SwarmServiceSummary[];
@@ -127,6 +148,8 @@ export interface SwarmReadModel {
 	services: SwarmServiceSummary[];
 	tasks: SwarmTaskSummary[];
 	stacks: SwarmStackSummary[];
+	configs: SwarmConfigSummary[];
+	secrets: SwarmSecretSummary[];
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -341,6 +364,60 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 	};
 }
 
+function mapSwarmResourceUsage(
+	serviceValues: unknown[],
+	resourceId: string,
+	kind: 'config' | 'secret'
+): SwarmResourceUsage[] {
+	const idKey = kind === 'config' ? 'ConfigID' : 'SecretID';
+	const listKey = kind === 'config' ? 'Configs' : 'Secrets';
+	const usage: SwarmResourceUsage[] = [];
+
+	for (const value of serviceValues) {
+		const service = isRecord(value) ? value : {};
+		const spec = isRecord(service.Spec) ? service.Spec : {};
+		const taskTemplate = isRecord(spec.TaskTemplate) ? spec.TaskTemplate : {};
+		const containerSpec = isRecord(taskTemplate.ContainerSpec) ? taskTemplate.ContainerSpec : {};
+		const references = Array.isArray(containerSpec[listKey]) ? containerSpec[listKey] : [];
+		if (!references.some((reference: unknown) => isRecord(reference) && reference[idKey] === resourceId)) continue;
+
+		const serviceId = stringValue(service.ID) ?? '';
+		usage.push({
+			serviceId,
+			serviceName: stringValue(spec.Name) ?? serviceId
+		});
+	}
+
+	return usage.sort((a, b) => a.serviceName.localeCompare(b.serviceName));
+}
+
+function mapSwarmResource(
+	value: unknown,
+	serviceValues: unknown[],
+	kind: 'config' | 'secret'
+): SwarmConfigSummary | SwarmSecretSummary {
+	const resource = isRecord(value) ? value : {};
+	const spec = isRecord(resource.Spec) ? resource.Spec : {};
+	const id = stringValue(resource.ID) ?? '';
+
+	// Intentionally map only metadata. In particular, never copy Spec.Data for secrets.
+	return {
+		id,
+		name: stringValue(spec.Name) ?? id,
+		createdAt: stringValue(resource.CreatedAt),
+		updatedAt: stringValue(resource.UpdatedAt),
+		services: mapSwarmResourceUsage(serviceValues, id, kind)
+	};
+}
+
+export function mapSwarmConfig(value: unknown, serviceValues: unknown[] = []): SwarmConfigSummary {
+	return mapSwarmResource(value, serviceValues, 'config');
+}
+
+export function mapSwarmSecret(value: unknown, serviceValues: unknown[] = []): SwarmSecretSummary {
+	return mapSwarmResource(value, serviceValues, 'secret');
+}
+
 export function mapSwarmStacks(services: SwarmServiceSummary[]): SwarmStackSummary[] {
 	const grouped = new Map<string, SwarmServiceSummary[]>();
 	for (const service of services) {
@@ -424,21 +501,24 @@ export async function loadSwarmReadModel(
 			nodes: [],
 			services: [],
 			tasks: [],
-			stacks: []
+			stacks: [],
+			configs: [],
+			secrets: []
 		};
 	}
 
-	const [clusterValue, nodeValues, serviceValues, taskValues] = await Promise.all([
+	const [clusterValue, nodeValues, serviceValues, taskValues, configValues, secretValues] = await Promise.all([
 		request('/swarm'),
 		request('/nodes'),
 		request('/services?status=true'),
-		request('/tasks')
+		request('/tasks'),
+		request('/configs'),
+		request('/secrets')
 	]);
+	const rawServices = Array.isArray(serviceValues) ? serviceValues : [];
 	const nodes = Array.isArray(nodeValues) ? nodeValues.map(mapSwarmNode) : [];
 	const tasks = Array.isArray(taskValues) ? taskValues.map(mapSwarmTask) : [];
-	const services = Array.isArray(serviceValues)
-		? serviceValues.map((service) => mapSwarmService(service, tasks))
-		: [];
+	const services = rawServices.map((service) => mapSwarmService(service, tasks));
 
 	return {
 		capability,
@@ -447,6 +527,12 @@ export async function loadSwarmReadModel(
 		nodes,
 		services,
 		tasks,
-		stacks: mapSwarmStacks(services)
+		stacks: mapSwarmStacks(services),
+		configs: Array.isArray(configValues)
+			? configValues.map((config) => mapSwarmConfig(config, rawServices))
+			: [],
+		secrets: Array.isArray(secretValues)
+			? secretValues.map((secret) => mapSwarmSecret(secret, rawServices))
+			: []
 	};
 }

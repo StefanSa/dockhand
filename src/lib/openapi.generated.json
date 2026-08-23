@@ -25921,7 +25921,7 @@
         "tags": [
           "swarm"
         ],
-        "summary": "Get a read-only Swarm overview with cluster, node, service, and task data",
+        "summary": "Get a read-only Swarm overview including config and secret metadata",
         "parameters": [
           {
             "name": "env",
@@ -25969,6 +25969,15 @@
                     },
                     "tasks": {
                       "type": "string"
+                    },
+                    "stacks": {
+                      "type": "string"
+                    },
+                    "configs": {
+                      "type": "string"
+                    },
+                    "secrets": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -25981,7 +25990,10 @@
                   "cluster": {},
                   "nodes": "string",
                   "services": "string",
-                  "tasks": "string"
+                  "tasks": "string",
+                  "stacks": "string",
+                  "configs": "string",
+                  "secrets": "string"
                 }
               }
             }
@@ -25997,6 +26009,267 @@
           },
           "502": {
             "description": "The Docker endpoint rejected or failed a Swarm API request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/swarm/configs": {
+      "get": {
+        "operationId": "get_api_swarm_configs",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "List Swarm configs and their service usage on a manager environment",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Refresh the environment capability before reading config metadata"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "capability": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "managerEndpointRequired": {
+                      "type": "boolean"
+                    },
+                    "resources": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "managerEndpointRequired"
+                  ]
+                },
+                "example": {
+                  "capability": {},
+                  "managerEndpointRequired": true,
+                  "resources": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A valid environment ID is required"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm config request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_swarm_configs",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Create an immutable Swarm config on a manager environment",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id",
+                    "name"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string",
+                  "name": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid environment, name, or value"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "409": {
+            "description": "Manager endpoint required, or config name conflict"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm config request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "value"
+                ]
+              },
+              "example": {
+                "name": "app-config-v2",
+                "value": "setting=true"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/swarm/configs/{id}": {
+      "delete": {
+        "operationId": "delete_api_swarm_configs_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Delete an unused immutable Swarm config from a manager environment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm config ID (from GET /api/swarm/configs)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid config or environment ID"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or config not found"
+          },
+          "409": {
+            "description": "Config is in use, manager endpoint required, or Docker conflict"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm config request"
           }
         },
         "security": [
@@ -26130,6 +26403,267 @@
             }
           }
         }
+      }
+    },
+    "/api/swarm/secrets": {
+      "get": {
+        "operationId": "get_api_swarm_secrets",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "List only Swarm secret metadata and service usage on a manager environment",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Refresh the environment capability before reading secret metadata"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "capability": {
+                      "type": "object",
+                      "properties": {}
+                    },
+                    "managerEndpointRequired": {
+                      "type": "boolean"
+                    },
+                    "resources": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "managerEndpointRequired"
+                  ]
+                },
+                "example": {
+                  "capability": {},
+                  "managerEndpointRequired": true,
+                  "resources": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A valid environment ID is required"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm secret request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "post_api_swarm_secrets",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Create an immutable Swarm secret without returning its value",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id",
+                    "name"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string",
+                  "name": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid environment, name, or value"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "409": {
+            "description": "Manager endpoint required, or secret name conflict"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm secret request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "value"
+                ]
+              },
+              "example": {
+                "name": "string",
+                "value": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/swarm/secrets/{id}": {
+      "delete": {
+        "operationId": "delete_api_swarm_secrets_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Delete unused Swarm secret metadata from a manager environment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm secret ID (from GET /api/swarm/secrets)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid secret or environment ID"
+          },
+          "403": {
+            "description": "Permission denied, or no access to this environment"
+          },
+          "404": {
+            "description": "Environment or secret not found"
+          },
+          "409": {
+            "description": "Secret is in use, manager endpoint required, or Docker conflict"
+          },
+          "502": {
+            "description": "Docker rejected or failed the Swarm secret request"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/swarm/services/{id}": {

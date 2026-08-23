@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
 	mapSwarmCluster,
+	mapSwarmConfig,
 	mapSwarmNode,
+	mapSwarmSecret,
 	mapSwarmService,
 	mapSwarmStacks,
 	mapSwarmTask,
@@ -135,6 +137,39 @@ describe('Swarm read-only response mapping', () => {
 		assert.equal(stacks[0].desiredTasks, 3);
 	});
 
+	it('maps config and secret metadata with safely derived service usage', () => {
+		const services = [{
+			ID: 'service-1',
+			Spec: {
+				Name: 'demo_web',
+				TaskTemplate: { ContainerSpec: {
+					Configs: [{ ConfigID: 'config-1', ConfigName: 'app-config' }],
+					Secrets: [{ SecretID: 'secret-1', SecretName: 'db-password' }]
+				} }
+			}
+		}];
+		const config = mapSwarmConfig({
+			ID: 'config-1', CreatedAt: '2026-08-23T10:00:00Z', UpdatedAt: '2026-08-23T10:01:00Z',
+			Spec: { Name: 'app-config', Data: 'must-not-leak' }
+		}, services);
+		const secret = mapSwarmSecret({
+			ID: 'secret-1', CreatedAt: '2026-08-23T11:00:00Z', UpdatedAt: '2026-08-23T11:01:00Z',
+			Spec: { Name: 'db-password', Data: 'c3VwZXItc2VjcmV0' }
+		}, services);
+
+		assert.deepEqual(config, {
+			id: 'config-1', name: 'app-config', createdAt: '2026-08-23T10:00:00Z', updatedAt: '2026-08-23T10:01:00Z',
+			services: [{ serviceId: 'service-1', serviceName: 'demo_web' }]
+		});
+		assert.deepEqual(secret, {
+			id: 'secret-1', name: 'db-password', createdAt: '2026-08-23T11:00:00Z', updatedAt: '2026-08-23T11:01:00Z',
+			services: [{ serviceId: 'service-1', serviceName: 'demo_web' }]
+		});
+		assert.equal(JSON.stringify({ config, secret }).includes('must-not-leak'), false);
+		assert.equal(JSON.stringify(secret).includes('c3VwZXItc2VjcmV0'), false);
+		assert.equal('data' in secret, false);
+	});
+
 	it('does not call manager-only endpoints for a worker', async () => {
 		const capability: SwarmCapability = {
 			kind: 'swarm-worker',
@@ -153,9 +188,11 @@ describe('Swarm read-only response mapping', () => {
 		assert.equal(model.managerEndpointRequired, true);
 		assert.equal(model.cluster, null);
 		assert.deepEqual(model.nodes, []);
+		assert.deepEqual(model.configs, []);
+		assert.deepEqual(model.secrets, []);
 	});
 
-	it('uses only the four read-only manager endpoints', async () => {
+	it('uses only the six read-only manager endpoints', async () => {
 		const capability: SwarmCapability = {
 			kind: 'swarm-manager',
 			localNodeState: 'active',
@@ -167,14 +204,16 @@ describe('Swarm read-only response mapping', () => {
 			'/swarm': { ID: 'cluster' },
 			'/nodes': [],
 			'/services?status=true': [],
-			'/tasks': []
+			'/tasks': [],
+			'/configs': [],
+			'/secrets': []
 		};
 		const model = await loadSwarmReadModel(capability, async (path) => {
 			requested.push(path);
 			return responses[path];
 		});
 
-		assert.deepEqual(requested.sort(), ['/nodes', '/services?status=true', '/swarm', '/tasks'].sort());
+		assert.deepEqual(requested.sort(), ['/configs', '/nodes', '/secrets', '/services?status=true', '/swarm', '/tasks'].sort());
 		assert.equal(model.cluster?.id, 'cluster');
 	});
 });

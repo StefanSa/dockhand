@@ -1,10 +1,14 @@
 import { dockerFetch, dockerJsonRequest, getDockerInfo, getDockerVersion } from './docker';
 import {
 	loadSwarmReadModel,
+	mapSwarmConfig,
+	mapSwarmSecret,
 	parseSwarmCapability,
 	unknownSwarmCapability,
 	type SwarmCapability,
-	type SwarmReadModel
+	type SwarmConfigSummary,
+	type SwarmReadModel,
+	type SwarmSecretSummary
 } from '$lib/types/swarm';
 import {
 	performSwarmServiceAction,
@@ -16,6 +20,13 @@ import {
 	type SwarmNodeAction,
 	type SwarmNodeActionResult
 } from './swarm-node';
+import {
+	performSwarmResourceCreate,
+	performSwarmResourceDelete,
+	type SwarmResourceCreateResult,
+	type SwarmResourceDeleteResult,
+	type SwarmResourceKind
+} from './swarm-resource';
 
 const CAPABILITY_CACHE_TTL_MS = 30_000;
 const UNKNOWN_CACHE_TTL_MS = 5_000;
@@ -81,6 +92,96 @@ export async function getSwarmReadModel(environmentId: number, refreshCapability
 	return loadSwarmReadModel(
 		capability,
 		(path) => dockerJsonRequest<unknown>(path, {}, environmentId)
+	);
+}
+
+export interface SwarmResourceList {
+	capability: SwarmCapability;
+	managerEndpointRequired: boolean;
+	resources: SwarmConfigSummary[] | SwarmSecretSummary[];
+}
+
+export async function getSwarmResourceList(
+	environmentId: number,
+	kind: SwarmResourceKind,
+	refreshCapability = false
+): Promise<SwarmResourceList> {
+	const capability = await getSwarmCapability(environmentId, refreshCapability);
+	if (capability.kind !== 'swarm-manager') {
+		return {
+			capability,
+			managerEndpointRequired: capability.kind === 'swarm-worker',
+			resources: []
+		};
+	}
+
+	const [resourceValues, serviceValues] = await Promise.all([
+		dockerJsonRequest<unknown>(kind === 'config' ? '/configs' : '/secrets', {}, environmentId),
+		dockerJsonRequest<unknown>('/services', {}, environmentId)
+	]);
+	const rawServices = Array.isArray(serviceValues) ? serviceValues : [];
+	const resources = Array.isArray(resourceValues)
+		? resourceValues.map((resource) => kind === 'config'
+			? mapSwarmConfig(resource, rawServices)
+			: mapSwarmSecret(resource, rawServices))
+		: [];
+
+	return { capability, managerEndpointRequired: false, resources };
+}
+
+async function swarmResourceRequest(
+	environmentId: number,
+	path: string,
+	options: RequestInit = {}
+): Promise<unknown> {
+	const response = await dockerFetch(path, {
+		...options,
+		headers: { 'Content-Type': 'application/json', ...options.headers }
+	}, environmentId);
+	const text = await response.text();
+	let value: any = undefined;
+	if (text) {
+		try {
+			value = JSON.parse(text);
+		} catch {
+			value = undefined;
+		}
+	}
+	if (!response.ok) {
+		const error: any = new Error(value?.message || `Docker API error: ${response.status}`);
+		error.statusCode = response.status;
+		throw error;
+	}
+	return value;
+}
+
+export async function createSwarmResource(
+	environmentId: number,
+	kind: SwarmResourceKind,
+	name: unknown,
+	value: unknown
+): Promise<SwarmResourceCreateResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmResourceCreate(
+		capability,
+		kind,
+		name,
+		value,
+		(path, options = {}) => swarmResourceRequest(environmentId, path, options)
+	);
+}
+
+export async function deleteSwarmResource(
+	environmentId: number,
+	kind: SwarmResourceKind,
+	resourceId: string
+): Promise<SwarmResourceDeleteResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmResourceDelete(
+		capability,
+		kind,
+		resourceId,
+		(path, options = {}) => swarmResourceRequest(environmentId, path, options)
 	);
 }
 

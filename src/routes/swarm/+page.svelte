@@ -5,13 +5,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Card from '$lib/components/ui/card';
@@ -25,12 +26,14 @@
 	import { currentEnvironment } from '$lib/stores/environment';
 	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
-	import type { SwarmNodeSummary, SwarmReadModel, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
+	import type { SwarmConfigSummary, SwarmNodeSummary, SwarmReadModel, SwarmSecretSummary, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
 	import { filterSwarmTasks, isFailedSwarmTask, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
 
 	type NodeDialogAction =
 		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
 		| { type: 'role'; role: 'worker' | 'manager' };
+	type SwarmResourceKind = 'config' | 'secret';
+	type SwarmResourceSummary = SwarmConfigSummary | SwarmSecretSummary;
 
 	const POLL_INTERVAL_MS = 30_000;
 	const SwarmIcon = Network as unknown as Component;
@@ -64,6 +67,14 @@
 	let nodeAction = $state<NodeDialogAction | null>(null);
 	let nodeActionPending = $state(false);
 	let nodeActionError = $state<string | null>(null);
+	let resourceDialogOpen = $state(false);
+	let resourceKind = $state<SwarmResourceKind>('config');
+	let resourceName = $state('');
+	let resourceValue = $state('');
+	let resourcePending = $state(false);
+	let resourceError = $state<string | null>(null);
+	let deleteResourceDialogOpen = $state(false);
+	let deleteResource = $state<SwarmResourceSummary | null>(null);
 	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
 	const visibleTasks = $derived(filterSwarmTasks(
 		data?.tasks ?? [],
@@ -75,7 +86,7 @@
 
 	$effect(() => {
 		const requestedTab = $page.url.searchParams.get('tab');
-		if (requestedTab && ['overview', 'nodes', 'services', 'stacks', 'tasks'].includes(requestedTab)) {
+		if (requestedTab && ['overview', 'nodes', 'services', 'stacks', 'tasks', 'configs', 'secrets'].includes(requestedTab)) {
 			activeTab = requestedTab;
 		}
 	});
@@ -121,6 +132,95 @@
 
 	function formatCpu(nanoCpus: number | undefined): string {
 		return nanoCpus ? `${(nanoCpus / 1_000_000_000).toFixed(1)} CPU` : '—';
+	}
+
+	function formatDate(value: string | undefined): string {
+		if (!value) return '—';
+		const date = new Date(value);
+		return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+	}
+
+	function resourceLabel(kind: SwarmResourceKind): string {
+		return kind === 'config' ? 'Config' : 'Secret';
+	}
+
+	function resourceApiPath(kind: SwarmResourceKind): string {
+		return kind === 'config' ? 'configs' : 'secrets';
+	}
+
+	function openCreateResourceDialog(kind: SwarmResourceKind): void {
+		resourceKind = kind;
+		resourceName = '';
+		resourceValue = '';
+		resourceError = null;
+		resourceDialogOpen = true;
+	}
+
+	function closeResourceDialog(): void {
+		if (resourcePending) return;
+		resourceDialogOpen = false;
+		resourceName = '';
+		resourceValue = '';
+		resourceError = null;
+	}
+
+	async function createResource(): Promise<void> {
+		if (!environmentId || resourcePending || !resourceName.trim()) return;
+		const submittedValue = resourceValue;
+		const submittedName = resourceName.trim();
+		const submittedKind = resourceKind;
+		// Clear immediately. Secret input is never restored, even if Docker rejects the request.
+		resourceValue = '';
+		resourcePending = true;
+		resourceError = null;
+		try {
+			const response = await fetch(`/api/swarm/${resourceApiPath(submittedKind)}?env=${environmentId}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ name: submittedName, value: submittedValue })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || `Failed to create Swarm ${submittedKind}`);
+			resourceDialogOpen = false;
+			resourceName = '';
+			toast.success(`${resourceLabel(submittedKind)} ${body.name} created`);
+			await load(true);
+			activeTab = resourceApiPath(submittedKind);
+		} catch (createFailure) {
+			resourceError = createFailure instanceof Error ? createFailure.message : `Failed to create Swarm ${submittedKind}`;
+			toast.error(resourceError);
+		} finally {
+			resourcePending = false;
+		}
+	}
+
+	function openDeleteResourceDialog(kind: SwarmResourceKind, resource: SwarmResourceSummary): void {
+		resourceKind = kind;
+		deleteResource = resource;
+		resourceError = null;
+		deleteResourceDialogOpen = true;
+	}
+
+	async function confirmDeleteResource(): Promise<void> {
+		if (!environmentId || !deleteResource || resourcePending) return;
+		const resource = deleteResource;
+		const kind = resourceKind;
+		resourcePending = true;
+		resourceError = null;
+		try {
+			const response = await fetch(`/api/swarm/${resourceApiPath(kind)}/${encodeURIComponent(resource.id)}?env=${environmentId}`, { method: 'DELETE' });
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || `Failed to delete Swarm ${kind}`);
+			deleteResourceDialogOpen = false;
+			deleteResource = null;
+			toast.success(`${resourceLabel(kind)} ${resource.name} deleted`);
+			await load(true);
+		} catch (deleteFailure) {
+			resourceError = deleteFailure instanceof Error ? deleteFailure.message : `Failed to delete Swarm ${kind}`;
+			toast.error(resourceError);
+		} finally {
+			resourcePending = false;
+		}
 	}
 
 	function serviceName(serviceId: string | undefined): string {
@@ -348,12 +448,15 @@
 			closeActionDialog();
 			closeNodeActionDialog();
 			closeStackDialog();
+			closeResourceDialog();
 			removeStackDialogOpen = false;
+			deleteResourceDialogOpen = false;
+			deleteResource = null;
 			requestSequence++;
 			if (nextId) void load(true);
 		});
 		const interval = setInterval(() => {
-			if (environmentId && !loading && !refreshing && !actionPending && !nodeActionPending && !stackPending) void load(false);
+			if (environmentId && !loading && !refreshing && !actionPending && !nodeActionPending && !stackPending && !resourcePending) void load(false);
 		}, POLL_INTERVAL_MS);
 
 		return () => {
@@ -403,7 +506,7 @@
 			<ShieldAlert class="h-4 w-4" />
 			<Alert.Title>Manager endpoint required</Alert.Title>
 			<Alert.Description>
-				This environment is connected to a Swarm worker. Dockhand will not offer cluster reads through a worker or redirect to an advertised manager. Add a manager as a separate environment to view nodes, services, and tasks.
+				This environment is connected to a Swarm worker. Docker's cluster Config and Secret endpoints require a manager, so Dockhand will not redirect through an advertised manager. Add a manager as a separate environment to view nodes, services, tasks, configs, and secret metadata.
 			</Alert.Description>
 		</Alert.Root>
 		<Card.Root>
@@ -447,8 +550,10 @@
 				<Tabs.Trigger value="overview">Overview</Tabs.Trigger>
 				<Tabs.Trigger value="nodes">Nodes ({data.nodes.length})</Tabs.Trigger>
 				<Tabs.Trigger value="services">Services ({data.services.length})</Tabs.Trigger>
-				<Tabs.Trigger value="stacks">Swarm Stacks ({data.stacks.length})</Tabs.Trigger>
 				<Tabs.Trigger value="tasks">Tasks ({data.tasks.length})</Tabs.Trigger>
+				<Tabs.Trigger value="stacks">Swarm Stacks ({data.stacks.length})</Tabs.Trigger>
+				<Tabs.Trigger value="configs">Configs ({data.configs.length})</Tabs.Trigger>
+				<Tabs.Trigger value="secrets">Secrets ({data.secrets.length})</Tabs.Trigger>
 			</Tabs.List>
 
 			<Tabs.Content value="overview" class="space-y-4 overflow-auto">
@@ -619,6 +724,66 @@
 					</Table.Root>
 				{/if}
 			</Tabs.Content>
+
+			<Tabs.Content value="configs" class="min-h-0 overflow-auto rounded-md border">
+				<div class="flex items-center justify-between gap-3 border-b p-3">
+					<div><h2 class="font-medium">Swarm Configs</h2><p class="text-xs text-muted-foreground">Configs are immutable. Create a new Config and update the Service or Stack to change content.</p></div>
+					{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+						<Button size="sm" onclick={() => openCreateResourceDialog('config')} disabled={resourcePending}><Plus class="h-4 w-4" /> Create Config</Button>
+					{/if}
+				</div>
+				{#if data.configs.length === 0}
+					<div class="flex min-h-32 flex-col items-center justify-center gap-2 text-sm text-muted-foreground"><FileCog class="h-6 w-6" />No Swarm Configs found.</div>
+				{:else}
+					<Table.Root>
+						<Table.Header><Table.Row><Table.Head>Name</Table.Head><Table.Head>ID</Table.Head><Table.Head>Created</Table.Head><Table.Head>Updated</Table.Head><Table.Head>Used by Services</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
+						<Table.Body>
+							{#each data.configs as config (config.id)}
+								<Table.Row>
+									<Table.Cell class="font-medium">{config.name}</Table.Cell>
+									<Table.Cell class="font-mono text-xs" title={config.id}>{config.id.slice(0, 12)}</Table.Cell>
+									<Table.Cell class="text-sm">{formatDate(config.createdAt)}</Table.Cell>
+									<Table.Cell class="text-sm">{formatDate(config.updatedAt)}</Table.Cell>
+									<Table.Cell>{#if config.services.length}<div class="flex flex-wrap gap-1">{#each config.services as usage (usage.serviceId)}<Badge variant="outline">{usage.serviceName}</Badge>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
+									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+										<Table.Cell class="text-right"><Button variant="destructive" size="sm" onclick={() => openDeleteResourceDialog('config', config)} disabled={resourcePending || config.services.length > 0} title={config.services.length ? 'Update or remove the using Services first' : 'Delete Config'}><Trash2 class="h-4 w-4" /> Delete</Button></Table.Cell>
+									{/if}
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				{/if}
+			</Tabs.Content>
+
+			<Tabs.Content value="secrets" class="min-h-0 overflow-auto rounded-md border">
+				<div class="flex items-center justify-between gap-3 border-b p-3">
+					<div><h2 class="font-medium">Swarm Secrets</h2><p class="text-xs text-muted-foreground">Only metadata is shown. Secret values cannot be read or edited after creation.</p></div>
+					{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+						<Button size="sm" onclick={() => openCreateResourceDialog('secret')} disabled={resourcePending}><Plus class="h-4 w-4" /> Create Secret</Button>
+					{/if}
+				</div>
+				{#if data.secrets.length === 0}
+					<div class="flex min-h-32 flex-col items-center justify-center gap-2 text-sm text-muted-foreground"><KeyRound class="h-6 w-6" />No Swarm Secrets found.</div>
+				{:else}
+					<Table.Root>
+						<Table.Header><Table.Row><Table.Head>Name</Table.Head><Table.Head>ID</Table.Head><Table.Head>Created</Table.Head><Table.Head>Updated</Table.Head><Table.Head>Used by Services</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
+						<Table.Body>
+							{#each data.secrets as secret (secret.id)}
+								<Table.Row>
+									<Table.Cell class="font-medium">{secret.name}</Table.Cell>
+									<Table.Cell class="font-mono text-xs" title={secret.id}>{secret.id.slice(0, 12)}</Table.Cell>
+									<Table.Cell class="text-sm">{formatDate(secret.createdAt)}</Table.Cell>
+									<Table.Cell class="text-sm">{formatDate(secret.updatedAt)}</Table.Cell>
+									<Table.Cell>{#if secret.services.length}<div class="flex flex-wrap gap-1">{#each secret.services as usage (usage.serviceId)}<Badge variant="outline">{usage.serviceName}</Badge>{/each}</div>{:else}<span class="text-muted-foreground">Unused</span>{/if}</Table.Cell>
+									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
+										<Table.Cell class="text-right"><Button variant="destructive" size="sm" onclick={() => openDeleteResourceDialog('secret', secret)} disabled={resourcePending || secret.services.length > 0} title={secret.services.length ? 'Update or remove the using Services first' : 'Delete Secret'}><Trash2 class="h-4 w-4" /> Delete</Button></Table.Cell>
+									{/if}
+								</Table.Row>
+							{/each}
+						</Table.Body>
+					</Table.Root>
+				{/if}
+			</Tabs.Content>
 		</Tabs.Root>
 	{:else}
 		<div class="flex flex-1 items-center justify-center text-muted-foreground">
@@ -662,6 +827,58 @@
 			>
 				{#if nodeActionPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
 				Confirm node update
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={resourceDialogOpen} onOpenChange={(open) => { if (!open) closeResourceDialog(); }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Create Swarm {resourceLabel(resourceKind)}</Dialog.Title>
+			<Dialog.Description>
+				{#if resourceKind === 'secret'}The value is sent once to Docker and is immediately cleared from this form. Dockhand never returns or redisplays it.{:else}Configs are immutable; changing this content later requires a new Config.{/if}
+			</Dialog.Description>
+		</Dialog.Header>
+		<div class="space-y-2">
+			<Label for="swarm-resource-name">Name</Label>
+			<Input id="swarm-resource-name" bind:value={resourceName} disabled={resourcePending} autocomplete="off" placeholder={resourceKind === 'config' ? 'app-config-v2' : 'app-secret-v2'} />
+		</div>
+		<div class="space-y-2">
+			<Label for="swarm-resource-value">{resourceKind === 'config' ? 'Content' : 'Secret value'}</Label>
+			{#if resourceKind === 'config'}
+				<Textarea id="swarm-resource-value" bind:value={resourceValue} disabled={resourcePending} rows={8} autocomplete="off" />
+			{:else}
+				<Input id="swarm-resource-value" type="password" bind:value={resourceValue} disabled={resourcePending} autocomplete="new-password" />
+			{/if}
+		</div>
+		{#if resourceError}
+			<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{resourceError}</Alert.Description></Alert.Root>
+		{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeResourceDialog} disabled={resourcePending}>Cancel</Button>
+			<Button onclick={createResource} disabled={resourcePending || !resourceName.trim()}>
+				{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+				Create {resourceLabel(resourceKind)}
+			</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
+
+<Dialog.Root bind:open={deleteResourceDialogOpen} onOpenChange={(open) => { if (!open && !resourcePending) { deleteResourceDialogOpen = false; deleteResource = null; resourceError = null; } }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Delete {resourceLabel(resourceKind)} “{deleteResource?.name}”?</Dialog.Title>
+			<Dialog.Description>This immutable Swarm {resourceKind} will be permanently removed. Docker will reject the operation if a Service starts using it before deletion completes.</Dialog.Description>
+		</Dialog.Header>
+		{#if resourceError}
+			<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{resourceError}</Alert.Description></Alert.Root>
+		{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={() => { deleteResourceDialogOpen = false; deleteResource = null; }} disabled={resourcePending}>Cancel</Button>
+			<Button variant="destructive" onclick={confirmDeleteResource} disabled={resourcePending}>
+				{#if resourcePending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
+				Delete {resourceLabel(resourceKind)}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
