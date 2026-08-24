@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	parseSwarmServiceUpdateInput,
 	performSwarmServiceAction,
 	SwarmServiceActionError
 } from '../src/lib/server/swarm-service';
-import type { SwarmCapability } from '../src/lib/types/swarm';
+import type { SwarmCapability, SwarmServiceUpdateInput } from '../src/lib/types/swarm';
 
 const manager: SwarmCapability = {
 	kind: 'swarm-manager',
@@ -26,6 +27,28 @@ function service(mode: Record<string, unknown>, forceUpdate = 4): Record<string,
 			Mode: mode,
 			UpdateConfig: { Parallelism: 1 }
 		}
+	};
+}
+
+function editedSpec(replicas: number | null = 3): SwarmServiceUpdateInput {
+	return {
+		image: 'nginx:1.29-alpine',
+		replicas,
+		command: ['nginx'],
+		args: ['-g', 'daemon off;'],
+		environment: ['APP_ENV=test', 'LOG_LEVEL=info'],
+		ports: [{ name: 'http', protocol: 'tcp', targetPort: 80, publishedPort: 18080, publishMode: 'ingress' }],
+		mounts: [{ type: 'volume', source: 'data', target: '/data', readOnly: true }],
+		networks: [{ target: 'network-id', aliases: ['web'], driverOpts: {} }],
+		configs: [{ id: 'config-id', name: 'app-config', target: '/etc/app.conf', uid: '1000', gid: '1000', mode: 288 }],
+		secrets: [{ id: 'secret-id', name: 'db-password', target: '/run/secrets/db-password' }],
+		constraints: ['node.labels.region==eu'],
+		resources: { limits: { cores: 0.5, memoryMb: 256 }, reservations: { cores: 0.25, memoryMb: 128 } },
+		restartPolicy: { condition: 'on-failure', delaySeconds: 2, maxAttempts: 4, windowSeconds: 60 },
+		updatePolicy: { parallelism: 2, delaySeconds: 1, failureAction: 'rollback', monitorSeconds: 10, maxFailureRatio: 0.25, order: 'start-first' },
+		rollbackPolicy: { parallelism: 1, delaySeconds: 0, failureAction: 'pause', monitorSeconds: 5, maxFailureRatio: 0, order: 'stop-first' },
+		stopGracePeriodSeconds: 15,
+		endpointMode: 'vip'
 	};
 }
 
@@ -66,6 +89,52 @@ describe('Swarm service actions', () => {
 		assert.equal(updateBody.Mode.Replicated.Replicas, 6);
 		assert.equal(updateBody.TaskTemplate.ContainerSpec.Image, 'alpine:latest');
 		assert.deepEqual(result, { action: 'force-update', version: 17, warnings: [] });
+	});
+
+	it('updates all supported ServiceSpec sections while preserving unrelated Docker fields', async () => {
+		const calls: Array<{ path: string; options?: RequestInit }> = [];
+		const current = service({ Replicated: { Replicas: 1 } });
+		(current.Spec as any).TaskTemplate.ContainerSpec.Hostname = 'preserved-hostname';
+		(current.Spec as any).TaskTemplate.Resources = { GenericResources: [{ DiscreteResourceSpec: { Kind: 'gpu', Value: 1 } }] };
+		(current.Spec as any).EndpointSpec = { Mode: 'vip' };
+
+		const result = await performSwarmServiceAction(manager, 'service', { type: 'update', spec: editedSpec() }, async (path, options) => {
+			calls.push({ path, options });
+			return calls.length === 1 ? current : { Warnings: [] };
+		});
+
+		const spec = JSON.parse(String(calls[1].options?.body));
+		assert.equal(spec.TaskTemplate.ContainerSpec.Image, 'nginx:1.29-alpine');
+		assert.equal(spec.TaskTemplate.ContainerSpec.Hostname, 'preserved-hostname');
+		assert.deepEqual(spec.TaskTemplate.ContainerSpec.Env, ['APP_ENV=test', 'LOG_LEVEL=info']);
+		assert.deepEqual(spec.TaskTemplate.ContainerSpec.Command, ['nginx']);
+		assert.deepEqual(spec.TaskTemplate.ContainerSpec.Args, ['-g', 'daemon off;']);
+		assert.equal(spec.Mode.Replicated.Replicas, 3);
+		assert.equal(spec.EndpointSpec.Ports[0].PublishedPort, 18080);
+		assert.equal(spec.TaskTemplate.ContainerSpec.Mounts[0].Target, '/data');
+		assert.equal(spec.TaskTemplate.Networks[0].Target, 'network-id');
+		assert.equal(spec.TaskTemplate.ContainerSpec.Configs[0].File.Mode, 288);
+		assert.equal(spec.TaskTemplate.ContainerSpec.Secrets[0].SecretID, 'secret-id');
+		assert.deepEqual(spec.TaskTemplate.Placement.Constraints, ['node.labels.region==eu']);
+		assert.equal(spec.TaskTemplate.Resources.Limits.NanoCPUs, 500_000_000);
+		assert.equal(spec.TaskTemplate.Resources.Limits.MemoryBytes, 268_435_456);
+		assert.equal(spec.TaskTemplate.Resources.GenericResources[0].DiscreteResourceSpec.Kind, 'gpu');
+		assert.equal(spec.UpdateConfig.Order, 'start-first');
+		assert.equal(spec.RollbackConfig.FailureAction, 'pause');
+		assert.equal(spec.TaskTemplate.RestartPolicy.MaxAttempts, 4);
+		assert.equal(spec.TaskTemplate.ContainerSpec.StopGracePeriod, 15_000_000_000);
+		assert.deepEqual(result, { action: 'update', version: 17, warnings: [] });
+	});
+
+	it('validates editor input before contacting Docker', () => {
+		assert.throws(
+			() => parseSwarmServiceUpdateInput({ ...editedSpec(), environment: ['INVALID'] }),
+			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
+		);
+		assert.throws(
+			() => parseSwarmServiceUpdateInput({ ...editedSpec(), ports: [{ protocol: 'tcp', targetPort: 70000, publishMode: 'ingress' }] }),
+			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
+		);
 	});
 
 	it('replaces only the selected Config reference while preserving its target and the complete Service spec', async () => {
@@ -122,6 +191,7 @@ describe('Swarm service actions', () => {
 		for (const action of [
 			{ type: 'scale', replicas: 3 } as const,
 			{ type: 'force-update' } as const,
+			{ type: 'update', spec: editedSpec(3) } as const,
 			{ type: 'replace-config', sourceConfigId: 'config-old', replacementConfigId: 'config-new', replacementConfigName: 'new' } as const
 		]) {
 			let requests = 0;
@@ -181,5 +251,20 @@ describe('Swarm service actions', () => {
 			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
 		);
 		assert.equal(requests, 1);
+	});
+
+	it('updates a global service only when replicas are explicitly absent', async () => {
+		let requests = 0;
+		const result = await performSwarmServiceAction(manager, 'global-service', { type: 'update', spec: editedSpec(null) }, async (_path, options) => {
+			requests++;
+			return options ? {} : service({ Global: {} });
+		});
+		assert.equal(result.action, 'update');
+		assert.equal(requests, 2);
+
+		await assert.rejects(
+			performSwarmServiceAction(manager, 'global-service', { type: 'update', spec: editedSpec(2) }, async () => service({ Global: {} })),
+			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
+		);
 	});
 });

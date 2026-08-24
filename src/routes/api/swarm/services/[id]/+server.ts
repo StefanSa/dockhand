@@ -5,14 +5,18 @@ import { getEnvironment } from '$lib/server/db';
 import { validateDockerIdParam } from '$lib/server/docker-validation';
 import { requireSwarmUpdateAccess } from '$lib/server/swarm-access';
 import { updateSwarmService } from '$lib/server/swarm';
-import { SwarmServiceActionError, type SwarmServiceAction } from '$lib/server/swarm-service';
+import {
+	parseSwarmServiceUpdateInput,
+	SwarmServiceActionError,
+	type SwarmServiceAction
+} from '$lib/server/swarm-service';
 
 /**
  * @openapi
- * summary: Scale, restart, or replace a Config reference on an existing Swarm service
+ * summary: Edit, scale, restart, or replace a Config reference on an existing Swarm service
  * path: id:string! Swarm service ID (from GET /api/swarm)
  * query: env:integer! Manager environment ID (from GET /api/environments)
- * body: {action:string!, replicas:integer, sourceConfigId:string, replacementConfigId:string, replacementConfigName:string}
+ * body: {action:string!, replicas:integer, spec:{image:string!, replicas:integer, command:array<string>, args:array<string>, environment:array<string>, ports:array<object>, mounts:array<object>, networks:array<object>, configs:array<object>, secrets:array<object>, constraints:array<string>, resources:object, restartPolicy:object, updatePolicy:object, rollbackPolicy:object, stopGracePeriodSeconds:number, endpointMode:string}, sourceConfigId:string, replacementConfigId:string, replacementConfigName:string}
  * body-example: {"action":"scale","replicas":3}
  * resp-200: {success:boolean!, action:string!, version:integer!, warnings:array<string>!}
  * resp-400: Invalid action, replica count, service ID, or unsupported service mode
@@ -45,6 +49,15 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 			return json({ error: 'Replicas must be a non-negative integer' }, { status: 400 });
 		}
 		action = { type: 'scale', replicas: body.replicas };
+	} else if (body?.action === 'update') {
+		try {
+			action = { type: 'update', spec: parseSwarmServiceUpdateInput(body.spec) };
+		} catch (error) {
+			if (error instanceof SwarmServiceActionError) {
+				return json({ error: error.message }, { status: error.statusCode });
+			}
+			throw error;
+		}
 	} else if (body?.action === 'force-update') {
 		action = { type: 'force-update' };
 	} else if (body?.action === 'replace-config') {
@@ -62,7 +75,7 @@ export const POST: RequestHandler = async ({ params, request, url, cookies }) =>
 			replacementConfigName: body.replacementConfigName
 		};
 	} else {
-		return json({ error: 'Action must be scale, force-update, or replace-config' }, { status: 400 });
+		return json({ error: 'Action must be update, scale, force-update, or replace-config' }, { status: 400 });
 	}
 
 	try {

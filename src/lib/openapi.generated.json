@@ -26890,7 +26890,7 @@
         "tags": [
           "swarm"
         ],
-        "summary": "Scale, restart, or replace a Config reference on an existing Swarm service",
+        "summary": "Edit, scale, restart, or replace a Config reference on an existing Swarm service",
         "parameters": [
           {
             "name": "id",
@@ -26989,6 +26989,92 @@
                   },
                   "replicas": {
                     "type": "integer"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "properties": {
+                      "image": {
+                        "type": "string"
+                      },
+                      "replicas": {
+                        "type": "integer"
+                      },
+                      "command": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "args": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "environment": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "mounts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "networks": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "configs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "secrets": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "constraints": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "resources": {
+                        "type": "string"
+                      },
+                      "restartPolicy": {
+                        "type": "string"
+                      },
+                      "updatePolicy": {
+                        "type": "string"
+                      },
+                      "rollbackPolicy": {
+                        "type": "string"
+                      },
+                      "stopGracePeriodSeconds": {
+                        "type": "number"
+                      },
+                      "endpointMode": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "image"
+                    ]
                   },
                   "sourceConfigId": {
                     "type": "string"

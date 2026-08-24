@@ -18,7 +18,8 @@ function model(ids: { node: string; service: string; task: string; stack: string
 		tasks: [{ id: ids.task } as SwarmReadModel['tasks'][number]],
 		stacks: [{ name: ids.stack } as SwarmReadModel['stacks'][number]],
 		configs: [{ id: ids.config } as SwarmReadModel['configs'][number]],
-		secrets: [{ id: ids.secret } as SwarmReadModel['secrets'][number]]
+		secrets: [{ id: ids.secret } as SwarmReadModel['secrets'][number]],
+		networks: []
 	};
 }
 

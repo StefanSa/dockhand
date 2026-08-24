@@ -200,9 +200,10 @@ describe('Swarm read-only response mapping', () => {
 		assert.deepEqual(model.nodes, []);
 		assert.deepEqual(model.configs, []);
 		assert.deepEqual(model.secrets, []);
+		assert.deepEqual(model.networks, []);
 	});
 
-	it('uses only the six read-only manager endpoints', async () => {
+	it('uses only the seven read-only manager endpoints', async () => {
 		const capability: SwarmCapability = {
 			kind: 'swarm-manager',
 			localNodeState: 'active',
@@ -216,14 +217,15 @@ describe('Swarm read-only response mapping', () => {
 			'/services?status=true': [],
 			'/tasks': [],
 			'/configs': [],
-			'/secrets': []
+			'/secrets': [],
+			'/networks': []
 		};
 		const model = await loadSwarmReadModel(capability, async (path) => {
 			requested.push(path);
 			return responses[path];
 		});
 
-		assert.deepEqual(requested.sort(), ['/configs', '/nodes', '/secrets', '/services?status=true', '/swarm', '/tasks'].sort());
+		assert.deepEqual(requested.sort(), ['/configs', '/networks', '/nodes', '/secrets', '/services?status=true', '/swarm', '/tasks'].sort());
 		assert.equal(model.cluster?.id, 'cluster');
 	});
 });

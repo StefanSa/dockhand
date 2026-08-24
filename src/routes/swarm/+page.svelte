@@ -24,6 +24,7 @@
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
+	import SwarmServiceEditorModal from './SwarmServiceEditorModal.svelte';
 	import { currentEnvironment } from '$lib/stores/environment';
 	import { canAccess } from '$lib/stores/auth';
 	import { swarmCapability } from '$lib/stores/swarm';
@@ -60,6 +61,8 @@
 	let actionPending = $state(false);
 	let actionError = $state<string | null>(null);
 	let pendingScales = $state<Record<string, PendingScale>>({});
+	let serviceEditorOpen = $state(false);
+	let serviceEditorService = $state<SwarmServiceSummary | null>(null);
 	let stackDialogOpen = $state(false);
 	let stackEditing = $state(false);
 	let stackName = $state('');
@@ -522,6 +525,12 @@
 		actionDialogOpen = true;
 	}
 
+	function openServiceEditor(service: SwarmServiceSummary): void {
+		if (isStackManagedSwarmService(service) || (service.mode !== 'replicated' && service.mode !== 'global')) return;
+		serviceEditorService = service;
+		serviceEditorOpen = true;
+	}
+
 	function closeActionDialog(): void {
 		if (actionPending) return;
 		actionDialogOpen = false;
@@ -694,6 +703,8 @@
 			data = null;
 			error = null;
 			closeActionDialog();
+			serviceEditorOpen = false;
+			serviceEditorService = null;
 			closeNodeActionDialog();
 			closeStackDialog();
 			closeResourceDialog();
@@ -833,6 +844,7 @@
 									{#if selectedService.stackName}
 										<Button size="sm" variant="outline" href={detailHref('stack', selectedService.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
 									{:else if data.capability.controlAvailable && $canAccess('swarm', 'update') && (selectedService.mode === 'replicated' || selectedService.mode === 'global')}
+										<Button size="sm" onclick={() => openServiceEditor(selectedService)}><Pencil class="h-4 w-4" /> Edit service</Button>
 										<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>
 									{/if}
 								</div>
@@ -1024,8 +1036,9 @@
 										<div class="flex justify-end gap-2">
 											{#if service.stackName}
 												<Button variant="outline" size="sm" href={detailHref('stack', service.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
-											{:else if service.mode === 'replicated' || service.mode === 'global'}
-												<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
+										{:else if service.mode === 'replicated' || service.mode === 'global'}
+											<Button size="sm" onclick={() => openServiceEditor(service)} disabled={actionPending}><Pencil class="h-4 w-4" /> Edit</Button>
+											<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
 													<RotateCw class="h-4 w-4" /> Restart
 												</Button>
 											{/if}
@@ -1189,6 +1202,19 @@
 		</div>
 	{/if}
 </div>
+
+<SwarmServiceEditorModal
+	bind:open={serviceEditorOpen}
+	service={serviceEditorService}
+	{environmentId}
+	networks={data?.networks ?? []}
+	configs={data?.configs ?? []}
+	secrets={data?.secrets ?? []}
+	onSaved={async () => {
+		toast.success('Swarm service update submitted');
+		await load(true);
+	}}
+/>
 
 <Dialog.Root bind:open={nodeDialogOpen} onOpenChange={(open) => { if (!open) closeNodeActionDialog(); }}>
 	<Dialog.Content class="max-w-lg">

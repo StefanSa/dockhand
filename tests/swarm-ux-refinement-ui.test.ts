@@ -8,6 +8,7 @@ const templatesPage = readFileSync(new URL('../src/routes/templates/+page.svelte
 const sidebar = readFileSync(new URL('../src/lib/components/app-sidebar.svelte', import.meta.url), 'utf8');
 const capabilityStore = readFileSync(new URL('../src/lib/stores/swarm-capability.ts', import.meta.url), 'utf8');
 const swarmStore = readFileSync(new URL('../src/lib/stores/swarm.ts', import.meta.url), 'utf8');
+const serviceEditor = readFileSync(new URL('../src/routes/swarm/SwarmServiceEditorModal.svelte', import.meta.url), 'utf8');
 
 describe('Swarm UX refinement UI gates', () => {
 	it('renders direct compact replicated scale controls and an explicit pending target', () => {
@@ -30,6 +31,19 @@ describe('Swarm UX refinement UI gates', () => {
 		assert.match(swarmPage, /stored definition.*?source of truth/s);
 		assert.match(swarmPage, /!isStackManagedSwarmService\(service\)/);
 		assert.match(swarmPage, /disabled=\{resourcePending \|\| Boolean\(usage\.stackName\)\}/);
+	});
+
+	it('offers the complete direct ServiceUpdate editor only for standalone replicated and global services', () => {
+		assert.match(swarmPage, /openServiceEditor\(service/);
+		assert.match(swarmPage, /isStackManagedSwarmService\(service\)[\s\S]*?return/);
+		assert.match(serviceEditor, /action: 'update'/);
+		for (const label of [
+			'Image', 'Desired replicas', 'Command', 'Arguments', 'Environment', 'Published ports',
+			'Overlay networks', 'Mounts', 'Configs', 'Secrets', 'Placement constraints', 'CPU limit',
+			'Restart condition', 'Update policy', 'Rollback policy'
+		]) assert.match(serviceEditor, new RegExp(label));
+		assert.match(serviceEditor, /service\.mode === 'replicated'/);
+		assert.doesNotMatch(serviceEditor, /secret\.data|secretValue|Spec\.Data/);
 	});
 
 	it('uses real anchors for Service to Task to Node deep links', () => {

@@ -99,6 +99,24 @@ describe('Swarm capability store environment switching', () => {
 		assert.equal(capabilityForEnvironment(get(store), 3)?.kind, 'standalone');
 	});
 
+	it('never replaces a known manager or worker with a transient neutral state during refresh', async () => {
+		for (const kind of ['swarm-manager', 'swarm-worker'] as const) {
+			const refresh = deferred<SwarmCapability>();
+			let requestCount = 0;
+			const store = createSwarmCapabilityStore(() => {
+				requestCount++;
+				return requestCount === 1 ? Promise.resolve(capability(kind)) : refresh.promise;
+			});
+			await store.load(10);
+			const pendingRefresh = store.load(10, true);
+			assert.equal(capabilityForEnvironment(get(store), 10)?.kind, kind);
+			assert.equal(get(store).loading, true);
+			refresh.resolve(capability(kind));
+			await pendingRefresh;
+			assert.equal(capabilityForEnvironment(get(store), 10)?.kind, kind);
+		}
+	});
+
 	it('hydrates the last known capability synchronously across page reloads', async () => {
 		const cache = capabilityCache([[7, capability('swarm-manager')]]);
 		const response = deferred<SwarmCapability>();

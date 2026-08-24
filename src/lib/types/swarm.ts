@@ -63,6 +63,9 @@ export interface SwarmServiceSummary {
 	version: number;
 	name: string;
 	image?: string;
+	command: string[];
+	args: string[];
+	environment: string[];
 	mode: 'replicated' | 'global' | 'replicated-job' | 'global-job' | 'unknown';
 	desiredTasks: number | null;
 	runningTasks: number;
@@ -72,15 +75,17 @@ export interface SwarmServiceSummary {
 	stackName?: string;
 	constraints: string[];
 	preferences: unknown[];
+	mounts: SwarmServiceMount[];
+	networks: SwarmServiceNetworkAttachment[];
 	configs: SwarmServiceResourceReference[];
 	secrets: SwarmServiceResourceReference[];
-	ports: Array<{
-		name?: string;
-		protocol?: string;
-		targetPort?: number;
-		publishedPort?: number;
-		publishMode?: string;
-	}>;
+	ports: SwarmServicePort[];
+	resources: SwarmServiceResources;
+	restartPolicy?: SwarmServiceRestartPolicy;
+	updatePolicy?: SwarmServiceUpdatePolicy;
+	rollbackPolicy?: SwarmServiceUpdatePolicy;
+	stopGracePeriodSeconds?: number;
+	endpointMode?: 'vip' | 'dnsrr';
 	updateStatus?: { state?: string; message?: string; startedAt?: string; completedAt?: string };
 	createdAt?: string;
 	updatedAt?: string;
@@ -90,6 +95,87 @@ export interface SwarmServiceResourceReference {
 	id: string;
 	name: string;
 	target?: string;
+	uid?: string;
+	gid?: string;
+	mode?: number;
+}
+
+export interface SwarmServicePort {
+	name?: string;
+	protocol: 'tcp' | 'udp' | 'sctp';
+	targetPort: number;
+	publishedPort?: number;
+	publishMode: 'ingress' | 'host';
+}
+
+export interface SwarmServiceMount {
+	type: 'bind' | 'volume' | 'tmpfs' | 'npipe' | 'cluster';
+	source?: string;
+	target: string;
+	readOnly: boolean;
+}
+
+export interface SwarmServiceNetworkAttachment {
+	target: string;
+	aliases: string[];
+	driverOpts: Record<string, string>;
+}
+
+export interface SwarmServiceResourceLimit {
+	cores?: number;
+	memoryMb?: number;
+}
+
+export interface SwarmServiceResources {
+	limits: SwarmServiceResourceLimit;
+	reservations: SwarmServiceResourceLimit;
+}
+
+export interface SwarmServiceRestartPolicy {
+	condition: 'none' | 'on-failure' | 'any';
+	delaySeconds?: number;
+	maxAttempts?: number;
+	windowSeconds?: number;
+}
+
+export interface SwarmServiceUpdatePolicy {
+	parallelism: number;
+	delaySeconds: number;
+	failureAction: 'continue' | 'pause' | 'rollback';
+	monitorSeconds: number;
+	maxFailureRatio: number;
+	order: 'stop-first' | 'start-first';
+}
+
+export interface SwarmServiceUpdateInput {
+	image: string;
+	replicas: number | null;
+	command: string[];
+	args: string[];
+	environment: string[];
+	ports: SwarmServicePort[];
+	mounts: SwarmServiceMount[];
+	networks: SwarmServiceNetworkAttachment[];
+	configs: SwarmServiceResourceReference[];
+	secrets: SwarmServiceResourceReference[];
+	constraints: string[];
+	resources: SwarmServiceResources;
+	restartPolicy?: SwarmServiceRestartPolicy;
+	updatePolicy?: SwarmServiceUpdatePolicy;
+	rollbackPolicy?: SwarmServiceUpdatePolicy;
+	stopGracePeriodSeconds?: number;
+	endpointMode?: 'vip' | 'dnsrr';
+}
+
+export interface SwarmNetworkSummary {
+	id: string;
+	name: string;
+	driver?: string;
+	scope?: string;
+	attachable: boolean;
+	internal: boolean;
+	ingress: boolean;
+	labels: Record<string, string>;
 }
 
 export interface SwarmResourceUsage {
@@ -168,6 +254,7 @@ export interface SwarmReadModel {
 	stacks: SwarmStackSummary[];
 	configs: SwarmConfigSummary[];
 	secrets: SwarmSecretSummary[];
+	networks: SwarmNetworkSummary[];
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -329,8 +416,56 @@ function mapServiceResourceReferences(
 		const name = stringValue(value[nameKey]) ?? id;
 		if (!id && !name) return [];
 		const file = isRecord(value.File) ? value.File : {};
-		return [{ id, name, target: stringValue(file.Name) }];
+		const reference: SwarmServiceResourceReference = { id, name };
+		const target = stringValue(file.Name);
+		const uid = stringValue(file.UID);
+		const gid = stringValue(file.GID);
+		const mode = numberValue(file.Mode);
+		if (target !== undefined) reference.target = target;
+		if (uid !== undefined) reference.uid = uid;
+		if (gid !== undefined) reference.gid = gid;
+		if (mode !== undefined) reference.mode = mode;
+		return [reference];
 	});
+}
+
+function stringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item: unknown): item is string => typeof item === 'string')
+		: [];
+}
+
+function secondsFromNanoseconds(value: unknown): number | undefined {
+	const nanoseconds = numberValue(value);
+	return nanoseconds === undefined ? undefined : nanoseconds / 1_000_000_000;
+}
+
+function mapServicePolicy(value: unknown): SwarmServiceUpdatePolicy | undefined {
+	if (!isRecord(value)) return undefined;
+	const failureAction = stringValue(value.FailureAction);
+	const order = stringValue(value.Order);
+	return {
+		parallelism: numberValue(value.Parallelism) ?? 1,
+		delaySeconds: secondsFromNanoseconds(value.Delay) ?? 0,
+		failureAction: failureAction === 'continue' || failureAction === 'rollback' ? failureAction : 'pause',
+		monitorSeconds: secondsFromNanoseconds(value.Monitor) ?? 5,
+		maxFailureRatio: numberValue(value.MaxFailureRatio) ?? 0,
+		order: order === 'start-first' ? 'start-first' : 'stop-first'
+	};
+}
+
+export function mapSwarmNetwork(value: unknown): SwarmNetworkSummary {
+	const network = isRecord(value) ? value : {};
+	return {
+		id: stringValue(network.Id) ?? stringValue(network.ID) ?? '',
+		name: stringValue(network.Name) ?? stringValue(network.Id) ?? '',
+		driver: stringValue(network.Driver),
+		scope: stringValue(network.Scope),
+		attachable: network.Attachable === true,
+		internal: network.Internal === true,
+		ingress: network.Ingress === true,
+		labels: stringRecord(network.Labels)
+	};
 }
 
 export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []): SwarmServiceSummary {
@@ -344,6 +479,10 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 	const placement = isRecord(taskTemplate.Placement) ? taskTemplate.Placement : {};
 	const serviceStatus = isRecord(service.ServiceStatus) ? service.ServiceStatus : {};
 	const updateStatus = isRecord(service.UpdateStatus) ? service.UpdateStatus : null;
+	const resources = isRecord(taskTemplate.Resources) ? taskTemplate.Resources : {};
+	const limits = isRecord(resources.Limits) ? resources.Limits : {};
+	const reservations = isRecord(resources.Reservations) ? resources.Reservations : {};
+	const restartPolicy = isRecord(taskTemplate.RestartPolicy) ? taskTemplate.RestartPolicy : null;
 	const id = stringValue(service.ID) ?? '';
 	const serviceTasks = tasks.filter((task) => task.serviceId === id);
 
@@ -380,6 +519,9 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 		version: versionIndex(service.Version),
 		name: stringValue(spec.Name) ?? id,
 		image: stringValue(containerSpec.Image),
+		command: stringArray(containerSpec.Command),
+		args: stringArray(containerSpec.Args),
+		environment: stringArray(containerSpec.Env),
 		mode,
 		desiredTasks,
 		runningTasks,
@@ -391,18 +533,66 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 			? placement.Constraints.filter((item: unknown): item is string => typeof item === 'string')
 			: [],
 		preferences: Array.isArray(placement.Preferences) ? placement.Preferences : [],
+		mounts: (Array.isArray(containerSpec.Mounts) ? containerSpec.Mounts : []).flatMap((value: unknown) => {
+			const mount = isRecord(value) ? value : {};
+			const type = stringValue(mount.Type);
+			const target = stringValue(mount.Target);
+			if (!target || !['bind', 'volume', 'tmpfs', 'npipe', 'cluster'].includes(type ?? '')) return [];
+			return [{
+				type: type as SwarmServiceMount['type'],
+				source: stringValue(mount.Source),
+				target,
+				readOnly: mount.ReadOnly === true
+			}];
+		}),
+		networks: (Array.isArray(taskTemplate.Networks) ? taskTemplate.Networks : []).flatMap((value: unknown) => {
+			const network = isRecord(value) ? value : {};
+			const target = stringValue(network.Target);
+			if (!target) return [];
+			return [{
+				target,
+				aliases: stringArray(network.Aliases),
+				driverOpts: stringRecord(network.DriverOpts)
+			}];
+		}),
 		configs: mapServiceResourceReferences(containerSpec, 'config'),
 		secrets: mapServiceResourceReferences(containerSpec, 'secret'),
-		ports: (Array.isArray(endpointSpec.Ports) ? endpointSpec.Ports : Array.isArray(endpoint.Ports) ? endpoint.Ports : []).map((port: unknown) => {
+		ports: (Array.isArray(endpointSpec.Ports) ? endpointSpec.Ports : Array.isArray(endpoint.Ports) ? endpoint.Ports : []).flatMap((port: unknown) => {
 			const item = isRecord(port) ? port : {};
-			return {
+			const targetPort = numberValue(item.TargetPort);
+			if (!targetPort) return [];
+			return [{
 				name: stringValue(item.Name),
-				protocol: stringValue(item.Protocol),
-				targetPort: numberValue(item.TargetPort),
+				protocol: ['udp', 'sctp'].includes(stringValue(item.Protocol) ?? '')
+					? stringValue(item.Protocol) as 'udp' | 'sctp'
+					: 'tcp',
+				targetPort,
 				publishedPort: numberValue(item.PublishedPort),
-				publishMode: stringValue(item.PublishMode)
-			};
+				publishMode: stringValue(item.PublishMode) === 'host' ? 'host' : 'ingress'
+			}];
 		}),
+		resources: {
+			limits: {
+				cores: numberValue(limits.NanoCPUs) === undefined ? undefined : (numberValue(limits.NanoCPUs) ?? 0) / 1_000_000_000,
+				memoryMb: numberValue(limits.MemoryBytes) === undefined ? undefined : (numberValue(limits.MemoryBytes) ?? 0) / 1024 / 1024
+			},
+			reservations: {
+				cores: numberValue(reservations.NanoCPUs) === undefined ? undefined : (numberValue(reservations.NanoCPUs) ?? 0) / 1_000_000_000,
+				memoryMb: numberValue(reservations.MemoryBytes) === undefined ? undefined : (numberValue(reservations.MemoryBytes) ?? 0) / 1024 / 1024
+			}
+		},
+		restartPolicy: restartPolicy ? {
+			condition: ['none', 'on-failure'].includes(stringValue(restartPolicy.Condition) ?? '')
+				? stringValue(restartPolicy.Condition) as 'none' | 'on-failure'
+				: 'any',
+			delaySeconds: secondsFromNanoseconds(restartPolicy.Delay),
+			maxAttempts: numberValue(restartPolicy.MaxAttempts),
+			windowSeconds: secondsFromNanoseconds(restartPolicy.Window)
+		} : undefined,
+		updatePolicy: mapServicePolicy(spec.UpdateConfig),
+		rollbackPolicy: mapServicePolicy(spec.RollbackConfig),
+		stopGracePeriodSeconds: secondsFromNanoseconds(containerSpec.StopGracePeriod),
+		endpointMode: stringValue(endpointSpec.Mode) === 'dnsrr' ? 'dnsrr' : 'vip',
 		updateStatus: updateStatus ? {
 			state: stringValue(updateStatus.State),
 			message: stringValue(updateStatus.Message),
@@ -571,17 +761,19 @@ export async function loadSwarmReadModel(
 			tasks: [],
 			stacks: [],
 			configs: [],
-			secrets: []
+			secrets: [],
+			networks: []
 		};
 	}
 
-	const [clusterValue, nodeValues, serviceValues, taskValues, configValues, secretValues] = await Promise.all([
+	const [clusterValue, nodeValues, serviceValues, taskValues, configValues, secretValues, networkValues] = await Promise.all([
 		request('/swarm'),
 		request('/nodes'),
 		request('/services?status=true'),
 		request('/tasks'),
 		request('/configs'),
-		request('/secrets')
+		request('/secrets'),
+		request('/networks')
 	]);
 	const rawServices = Array.isArray(serviceValues) ? serviceValues : [];
 	const nodes = Array.isArray(nodeValues) ? nodeValues.map(mapSwarmNode) : [];
@@ -601,6 +793,9 @@ export async function loadSwarmReadModel(
 			: [],
 		secrets: Array.isArray(secretValues)
 			? secretValues.map((secret) => mapSwarmSecret(secret, rawServices))
+			: [],
+		networks: Array.isArray(networkValues)
+			? networkValues.map(mapSwarmNetwork).filter((network) => network.scope === 'swarm' && !network.ingress)
 			: []
 	};
 }
