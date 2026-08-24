@@ -46,6 +46,16 @@ function serviceSpec(value: unknown): Record<string, any> {
 function prepareServiceSpec(value: unknown, action: SwarmServiceAction): Record<string, any> {
 	const spec = serviceSpec(value);
 	const mode = isRecord(spec.Mode) ? spec.Mode : {};
+	const labels = isRecord(spec.Labels) ? spec.Labels : {};
+	const stackName = typeof labels['com.docker.stack.namespace'] === 'string'
+		? labels['com.docker.stack.namespace'].trim()
+		: '';
+	if (stackName) {
+		throw new SwarmServiceActionError(
+			`Service is managed by Swarm stack "${stackName}". Update the stored stack definition and redeploy it instead of changing the live service.`,
+			409
+		);
+	}
 
 	if (action.type === 'replace-config') {
 		if (!action.sourceConfigId || !action.replacementConfigId || !action.replacementConfigName.trim()) {

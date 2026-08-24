@@ -26963,7 +26963,7 @@
             "description": "Environment or service not found"
           },
           "409": {
-            "description": "The environment is not a Swarm manager, or the service changed concurrently"
+            "description": "The environment is not a Swarm manager, the service changed concurrently, or the service is stack-managed"
           },
           "502": {
             "description": "The Docker endpoint rejected or failed the service update"

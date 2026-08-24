@@ -18,7 +18,7 @@ import { SwarmServiceActionError, type SwarmServiceAction } from '$lib/server/sw
  * resp-400: Invalid action, replica count, service ID, or unsupported service mode
  * resp-403: Permission denied, or no access to this environment
  * resp-404: Environment or service not found
- * resp-409: The environment is not a Swarm manager, or the service changed concurrently
+ * resp-409: The environment is not a Swarm manager, the service changed concurrently, or the service is stack-managed
  * resp-502: The Docker endpoint rejected or failed the service update
  */
 export const POST: RequestHandler = async ({ params, request, url, cookies }) => {

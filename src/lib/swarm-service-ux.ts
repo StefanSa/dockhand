@@ -40,7 +40,7 @@ export function swarmStatusPresentation(status: string | null | undefined): Swar
 	if (['updating', 'pending', 'degraded', 'partial', 'allocated', 'assigned', 'accepted', 'preparing', 'ready', 'starting', 'paused', 'rollback_started', 'rollback_paused'].includes(normalized)) {
 		return STATUS_TONES.warning;
 	}
-	if (['failed', 'rejected', 'unhealthy'].includes(normalized)) {
+	if (['failed', 'rejected', 'unhealthy', 'orphaned', 'rollback_failed', 'blocked'].includes(normalized)) {
 		return STATUS_TONES.destructive;
 	}
 	return STATUS_TONES.neutral;
@@ -63,6 +63,12 @@ export function hasReplicaMismatch(
 
 export function canScaleSwarmService(mode: SwarmServiceSummary['mode']): boolean {
 	return mode === 'replicated';
+}
+
+export function isStackManagedSwarmService(
+	service: Pick<SwarmServiceSummary, 'stackName'>
+): boolean {
+	return Boolean(service.stackName?.trim());
 }
 
 export function adjustedReplicaCount(value: string | number, delta: number): number {

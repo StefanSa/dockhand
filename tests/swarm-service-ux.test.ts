@@ -4,6 +4,7 @@ import {
 	adjustedReplicaCount,
 	canScaleSwarmService,
 	hasReplicaMismatch,
+	isStackManagedSwarmService,
 	swarmStatusPresentation,
 	swarmTaskStatusPresentation
 } from '../src/lib/swarm-service-ux';
@@ -16,7 +17,7 @@ describe('Swarm service status semantics', () => {
 		for (const state of ['updating', 'pending', 'degraded', 'partial']) {
 			assert.equal(swarmStatusPresentation(state).tone, 'warning');
 		}
-		for (const state of ['failed', 'rejected', 'unhealthy']) {
+		for (const state of ['failed', 'rejected', 'unhealthy', 'orphaned', 'rollback_failed', 'blocked']) {
 			assert.equal(swarmStatusPresentation(state).tone, 'destructive');
 		}
 		for (const state of ['shutdown', 'inactive', 'unknown', undefined]) {
@@ -47,5 +48,11 @@ describe('Swarm service status semantics', () => {
 		assert.equal(canScaleSwarmService('global'), false);
 		assert.equal(canScaleSwarmService('replicated-job'), false);
 		assert.equal(canScaleSwarmService('global-job'), false);
+	});
+
+	it('recognizes stack-managed services only from a non-empty stack namespace', () => {
+		assert.equal(isStackManagedSwarmService({ stackName: 'platform' }), true);
+		assert.equal(isStackManagedSwarmService({ stackName: '   ' }), false);
+		assert.equal(isStackManagedSwarmService({ stackName: undefined }), false);
 	});
 });

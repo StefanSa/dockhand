@@ -118,6 +118,28 @@ describe('Swarm service actions', () => {
 		}
 	});
 
+	it('rejects every direct mutation of a stack-managed service before issuing an update', async () => {
+		for (const action of [
+			{ type: 'scale', replicas: 3 } as const,
+			{ type: 'force-update' } as const,
+			{ type: 'replace-config', sourceConfigId: 'config-old', replacementConfigId: 'config-new', replacementConfigName: 'new' } as const
+		]) {
+			let requests = 0;
+			await assert.rejects(
+				performSwarmServiceAction(manager, 'stack-service', action, async () => {
+					requests++;
+					const current = service({ Replicated: { Replicas: 2 } });
+					(current.Spec as any).Labels['com.docker.stack.namespace'] = 'platform';
+					return current;
+				}),
+				(error: unknown) => error instanceof SwarmServiceActionError
+					&& error.statusCode === 409
+					&& /stored stack definition/i.test(error.message)
+			);
+			assert.equal(requests, 1);
+		}
+	});
+
 	for (const capability of [
 		{ ...manager, kind: 'swarm-worker', controlAvailable: false } as SwarmCapability,
 		{ ...manager, kind: 'standalone', localNodeState: 'inactive', controlAvailable: false } as SwarmCapability

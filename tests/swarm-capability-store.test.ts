@@ -3,7 +3,8 @@ import { describe, it } from 'node:test';
 import { get } from 'svelte/store';
 import {
 	capabilityForEnvironment,
-	createSwarmCapabilityStore
+	createSwarmCapabilityStore,
+	type SwarmCapabilityCache
 } from '../src/lib/stores/swarm-capability';
 import type { SwarmCapability } from '../src/lib/types/swarm';
 
@@ -19,6 +20,14 @@ function deferred<T>() {
 
 function capability(kind: SwarmCapability['kind']): SwarmCapability {
 	return { kind, detectedAt: '2026-08-23T00:00:00.000Z' };
+}
+
+function capabilityCache(seed: Array<[number, SwarmCapability]> = []): SwarmCapabilityCache {
+	const values = new Map(seed);
+	return {
+		get: (environmentId) => values.get(environmentId),
+		set: (environmentId, value) => { values.set(environmentId, value); }
+	};
 }
 
 describe('Swarm capability store environment switching', () => {
@@ -66,7 +75,7 @@ describe('Swarm capability store environment switching', () => {
 		assert.equal(get(store).capability?.kind, 'swarm-manager');
 	});
 
-	it('uses a neutral state while refreshing a standalone environment', async () => {
+	it('keeps the known standalone state visible while refreshing it', async () => {
 		const refresh = deferred<SwarmCapability>();
 		let requestCount = 0;
 		const store = createSwarmCapabilityStore(() => {
@@ -79,15 +88,68 @@ describe('Swarm capability store environment switching', () => {
 
 		assert.deepEqual(get(store), {
 			environmentId: 3,
-			capability: null,
+			capability: capability('standalone'),
 			loading: true,
 			error: null
 		});
-		assert.equal(capabilityForEnvironment(get(store), 3), null);
+		assert.equal(capabilityForEnvironment(get(store), 3)?.kind, 'standalone');
 
 		refresh.resolve(capability('standalone'));
 		await refreshLoad;
 		assert.equal(capabilityForEnvironment(get(store), 3)?.kind, 'standalone');
+	});
+
+	it('hydrates the last known capability synchronously across page reloads', async () => {
+		const cache = capabilityCache([[7, capability('swarm-manager')]]);
+		const response = deferred<SwarmCapability>();
+		const store = createSwarmCapabilityStore(() => response.promise, cache);
+
+		const load = store.load(7);
+		assert.equal(get(store).loading, true);
+		assert.equal(capabilityForEnvironment(get(store), 7)?.kind, 'swarm-manager');
+
+		response.resolve(capability('swarm-worker'));
+		await load;
+		assert.equal(capabilityForEnvironment(get(store), 7)?.kind, 'swarm-worker');
+
+		const reloaded = createSwarmCapabilityStore(() => Promise.resolve(capability('swarm-worker')), cache);
+		const reload = reloaded.load(7);
+		assert.equal(capabilityForEnvironment(get(reloaded), 7)?.kind, 'swarm-worker');
+		await reload;
+	});
+
+	it('switches between cached manager, worker and standalone states without a neutral frame', async () => {
+		const cache = capabilityCache([
+			[1, capability('swarm-manager')],
+			[2, capability('swarm-worker')],
+			[3, capability('standalone')]
+		]);
+		const pending = new Map<number, ReturnType<typeof deferred<SwarmCapability>>>();
+		const store = createSwarmCapabilityStore((environmentId) => {
+			const request = deferred<SwarmCapability>();
+			pending.set(environmentId, request);
+			return request.promise;
+		}, cache);
+
+		for (const [environmentId, kind] of [[1, 'swarm-manager'], [2, 'swarm-worker'], [3, 'standalone']] as const) {
+			void store.load(environmentId);
+			assert.equal(capabilityForEnvironment(get(store), environmentId)?.kind, kind);
+		}
+
+		pending.get(3)?.resolve(capability('standalone'));
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		assert.equal(capabilityForEnvironment(get(store), 3)?.kind, 'standalone');
+	});
+
+	it('keeps a cached capability when background refresh fails', async () => {
+		const store = createSwarmCapabilityStore(
+			() => Promise.reject(new Error('temporarily unavailable')),
+			capabilityCache([[4, capability('swarm-manager')]])
+		);
+
+		await store.load(4, true);
+		assert.equal(capabilityForEnvironment(get(store), 4)?.kind, 'swarm-manager');
+		assert.equal(get(store).error, 'temporarily unavailable');
 	});
 
 	it('never exposes manager or worker capability after switching to standalone', async () => {

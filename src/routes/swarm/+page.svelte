@@ -6,7 +6,7 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, SlidersHorizontal, Layers, Plus, Minus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound, ChevronRight, Copy, Check } from 'lucide-svelte';
+	import { Network, RefreshCw, Loader2, TriangleAlert, Server, ShieldAlert, RotateCw, Layers, Plus, Minus, Pencil, Trash2, Wrench, Search, FileCog, KeyRound, ChevronRight, Copy, Check } from 'lucide-svelte';
 	import type { Component } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
@@ -33,15 +33,17 @@
 	import { isSwarmDetailAvailable, parseSwarmDetail, swarmDetailHref, swarmTabHref, SWARM_TABS, type SwarmDetailKind, type SwarmTab } from '$lib/swarm-navigation';
 	import { planSwarmConfigReplacement } from '$lib/swarm-config-replacement';
 	import { servicesForSwarmNode, tasksForSwarmNode, tasksForSwarmService } from '$lib/swarm-relations';
-	import { adjustedReplicaCount, canScaleSwarmService, hasReplicaMismatch, swarmStatusPresentation, swarmTaskStatusPresentation } from '$lib/swarm-service-ux';
+	import { canScaleSwarmService, hasReplicaMismatch, isStackManagedSwarmService, swarmStatusPresentation, swarmTaskStatusPresentation } from '$lib/swarm-service-ux';
 
 	type NodeDialogAction =
 		| { type: 'availability'; availability: 'active' | 'pause' | 'drain' }
 		| { type: 'role'; role: 'worker' | 'manager' };
 	type SwarmResourceKind = 'config' | 'secret';
 	type SwarmResourceSummary = SwarmConfigSummary | SwarmSecretSummary;
+	type PendingScale = { target: number; requestedAt: number };
 
 	const POLL_INTERVAL_MS = 30_000;
+	const SCALE_PENDING_TIMEOUT_MS = 5 * 60_000;
 	const SwarmIcon = Network as unknown as Component;
 
 	let environmentId = $state<number | null>(null);
@@ -55,10 +57,9 @@
 	let requestSequence = 0;
 	let actionDialogOpen = $state(false);
 	let actionService = $state<SwarmServiceSummary | null>(null);
-	let actionType = $state<'scale' | 'force-update'>('scale');
-	let scaleReplicas = $state('');
 	let actionPending = $state(false);
 	let actionError = $state<string | null>(null);
+	let pendingScales = $state<Record<string, PendingScale>>({});
 	let stackDialogOpen = $state(false);
 	let stackEditing = $state(false);
 	let stackName = $state('');
@@ -140,6 +141,7 @@
 			if (!response.ok) throw new Error(body.error || 'Failed to load Swarm data');
 			if (requestId !== requestSequence) return;
 			data = body;
+			reconcilePendingScales(body);
 			swarmCapability.setCapability(environmentId, body.capability);
 		} catch (loadError) {
 			if (requestId !== requestSequence) return;
@@ -150,6 +152,25 @@
 				refreshing = false;
 			}
 		}
+	}
+
+	function pendingScaleFor(serviceId: string): PendingScale | undefined {
+		return pendingScales[serviceId];
+	}
+
+	function reconcilePendingScales(model: SwarmReadModel): void {
+		const now = Date.now();
+		const next = { ...pendingScales };
+		let changed = false;
+		for (const [serviceId, pending] of Object.entries(next)) {
+			const service = model.services.find((candidate) => candidate.id === serviceId);
+			const converged = service?.desiredTasks === pending.target && service.runningTasks === pending.target;
+			if (!service || converged || now - pending.requestedAt > SCALE_PENDING_TIMEOUT_MS) {
+				delete next[serviceId];
+				changed = true;
+			}
+		}
+		if (changed) pendingScales = next;
 	}
 
 	function formatBytes(value: number | undefined): string {
@@ -324,7 +345,7 @@
 			const body = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(body.error || 'Failed to create replacement Config');
 
-			const selectedUsages = replaceConfigSource.services.filter((usage) => plan.serviceIdsToUpdate.includes(usage.serviceId));
+			const selectedUsages = replaceConfigSource.services.filter((usage) => !usage.stackName && plan.serviceIdsToUpdate.includes(usage.serviceId));
 			const updatedServices: string[] = [];
 			const failedServices: string[] = [];
 			for (const usage of selectedUsages) {
@@ -446,11 +467,6 @@
 		return data?.nodes.find((node) => node.id === nodeId)?.hostname ?? nodeId?.slice(0, 12) ?? 'Unassigned';
 	}
 
-	function adjustScaleReplicas(delta: number): void {
-		scaleReplicas = String(adjustedReplicaCount(scaleReplicas, delta));
-		actionError = null;
-	}
-
 	function openNodeActionDialog(node: SwarmNodeSummary, action: NodeDialogAction): void {
 		actionNode = node;
 		nodeAction = action;
@@ -499,18 +515,9 @@
 		}
 	}
 
-	function openScaleDialog(service: SwarmServiceSummary): void {
-		if (!canScaleSwarmService(service.mode)) return;
-		actionService = service;
-		actionType = 'scale';
-		scaleReplicas = String(service.desiredTasks ?? 0);
-		actionError = null;
-		actionDialogOpen = true;
-	}
-
 	function openForceUpdateDialog(service: SwarmServiceSummary): void {
+		if (isStackManagedSwarmService(service)) return;
 		actionService = service;
-		actionType = 'force-update';
 		actionError = null;
 		actionDialogOpen = true;
 	}
@@ -524,13 +531,8 @@
 
 	async function confirmServiceAction(): Promise<void> {
 		if (!environmentId || !actionService || actionPending) return;
-		const replicas = Number(scaleReplicas);
-		if (actionType === 'scale' && !canScaleSwarmService(actionService.mode)) {
-			actionError = 'Only replicated services can be scaled.';
-			return;
-		}
-		if (actionType === 'scale' && (!Number.isSafeInteger(replicas) || replicas < 0)) {
-			actionError = 'Replicas must be a non-negative integer.';
+		if (isStackManagedSwarmService(actionService)) {
+			actionError = 'This Service is managed by a Swarm stack. Edit and redeploy the stored stack definition instead.';
 			return;
 		}
 
@@ -540,9 +542,7 @@
 			const response = await fetch(`/api/swarm/services/${encodeURIComponent(actionService.id)}?env=${environmentId}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(actionType === 'scale'
-					? { action: 'scale', replicas }
-					: { action: 'force-update' })
+				body: JSON.stringify({ action: 'force-update' })
 			});
 			const body = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(body.error || 'Failed to update Swarm service');
@@ -550,9 +550,7 @@
 			const serviceName = actionService.name;
 			actionDialogOpen = false;
 			actionService = null;
-			toast.success(actionType === 'scale'
-				? `${serviceName} desired replicas set to ${replicas}`
-				: `${serviceName} restart requested`);
+			toast.success(`${serviceName} restart requested`);
 			if (Array.isArray(body.warnings) && body.warnings.length > 0) {
 				toast.warning(body.warnings.join(' '));
 			}
@@ -562,6 +560,35 @@
 			toast.error(actionError);
 		} finally {
 			actionPending = false;
+		}
+	}
+
+	async function scaleServiceBy(service: SwarmServiceSummary, delta: -1 | 1): Promise<void> {
+		if (!environmentId || !canScaleSwarmService(service.mode) || isStackManagedSwarmService(service) || pendingScaleFor(service.id)) return;
+		const currentTarget = service.desiredTasks ?? service.runningTasks;
+		const target = Math.max(0, currentTarget + delta);
+		if (target === currentTarget) return;
+
+		pendingScales = {
+			...pendingScales,
+			[service.id]: { target, requestedAt: Date.now() }
+		};
+		try {
+			const response = await fetch(`/api/swarm/services/${encodeURIComponent(service.id)}?env=${environmentId}`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ action: 'scale', replicas: target })
+			});
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || 'Failed to scale Swarm service');
+			toast.success(`${service.name} desired replicas set to ${target}`);
+			if (Array.isArray(body.warnings) && body.warnings.length > 0) toast.warning(body.warnings.join(' '));
+			await load(true);
+		} catch (scaleFailure) {
+			const next = { ...pendingScales };
+			delete next[service.id];
+			pendingScales = next;
+			toast.error(scaleFailure instanceof Error ? scaleFailure.message : 'Failed to scale Swarm service');
 		}
 	}
 
@@ -802,15 +829,23 @@
 						<Card.Header class="gap-1">
 							<div class="flex flex-wrap items-start justify-between gap-3">
 								<div><Card.Title>{selectedService.name}</Card.Title><Card.Description class="font-mono break-all">{selectedService.id}</Card.Description></div>
-								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
-									<div class="flex gap-2">
-										{#if canScaleSwarmService(selectedService.mode)}<Button size="sm" variant="outline" onclick={() => openScaleDialog(selectedService)}><SlidersHorizontal class="h-4 w-4" /> Scale</Button>{/if}
-										{#if selectedService.mode === 'replicated' || selectedService.mode === 'global'}<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>{/if}
-									</div>
-								{/if}
+								<div class="flex gap-2">
+									{#if selectedService.stackName}
+										<Button size="sm" variant="outline" href={detailHref('stack', selectedService.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
+									{:else if data.capability.controlAvailable && $canAccess('swarm', 'update') && (selectedService.mode === 'replicated' || selectedService.mode === 'global')}
+										<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>
+									{/if}
+								</div>
 							</div>
 						</Card.Header>
 						<Card.Content class="space-y-5">
+							{#if selectedService.stackName}
+								<Alert.Root class="border-amber-600/30 bg-amber-500/10">
+									<Layers class="h-4 w-4 text-amber-700 dark:text-amber-400" />
+									<Alert.Title>Stack-managed service</Alert.Title>
+									<Alert.Description>The stored definition for <a class="font-medium underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a> is the source of truth. Direct scale, restart, and Config-reference changes are disabled; edit and redeploy the stack instead.</Alert.Description>
+								</Alert.Root>
+							{/if}
 							<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
 								<div><span class="text-muted-foreground">Image</span><p class="break-all font-mono text-xs">{selectedService.image ?? '—'}</p></div>
 								<div>
@@ -821,10 +856,18 @@
 								<div>
 									<span class="text-muted-foreground">Replicas</span>
 									{#if selectedService.mode === 'replicated'}
-										<p><Badge variant={swarmStatusPresentation(hasReplicaMismatch(selectedService) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(selectedService) ? 'partial' : 'stable').className}">{selectedService.runningTasks} / {selectedService.desiredTasks ?? '—'}</Badge></p>
-										<p class="mt-1 text-xs text-muted-foreground">Running / desired{#if hasReplicaMismatch(selectedService)} · reconciliation in progress{/if}</p>
+										<div class="mt-1 flex flex-wrap items-center gap-1">
+											{#if data.capability.controlAvailable && $canAccess('swarm', 'update') && !isStackManagedSwarmService(selectedService)}
+												<Button variant="outline" size="icon" class="h-7 w-7" onclick={() => scaleServiceBy(selectedService, -1)} disabled={Boolean(pendingScaleFor(selectedService.id)) || (selectedService.desiredTasks ?? 0) <= 0} aria-label={`Scale ${selectedService.name} down`}><Minus class="h-3.5 w-3.5" /></Button>
+											{/if}
+											<Badge variant={swarmStatusPresentation(hasReplicaMismatch(selectedService) || pendingScaleFor(selectedService.id) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(selectedService) || pendingScaleFor(selectedService.id) ? 'partial' : 'stable').className}">{selectedService.runningTasks} / {selectedService.desiredTasks ?? '—'}</Badge>
+											{#if data.capability.controlAvailable && $canAccess('swarm', 'update') && !isStackManagedSwarmService(selectedService)}
+												<Button variant="outline" size="icon" class="h-7 w-7" onclick={() => scaleServiceBy(selectedService, 1)} disabled={Boolean(pendingScaleFor(selectedService.id))} aria-label={`Scale ${selectedService.name} up`}><Plus class="h-3.5 w-3.5" /></Button>
+											{/if}
+										</div>
+										<p class="mt-1 text-xs text-muted-foreground">Running / desired{#if pendingScaleFor(selectedService.id)} · Pending target {pendingScaleFor(selectedService.id)?.target}{:else if hasReplicaMismatch(selectedService)} · reconciliation in progress{/if}</p>
 									{:else if selectedService.mode === 'global'}
-										<p class="text-muted-foreground">Managed by eligible nodes</p>
+										<p>{selectedService.runningTasks} running</p><p class="mt-1 text-xs text-muted-foreground">One task per eligible node · no manual scale</p>
 									{:else}
 										<p>{selectedService.runningTasks} running{#if selectedService.completedTasks > 0} · {selectedService.completedTasks} completed{/if}</p>
 									{/if}
@@ -953,15 +996,23 @@
 					<Table.Body>
 						{#each data.services as service (service.id)}
 							<Table.Row>
-								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('service', service.id)}>{service.name}</a><div class="text-xs text-muted-foreground font-mono">{service.id.slice(0, 12)}</div>{#if service.stackName}<a class="text-xs text-muted-foreground hover:text-foreground hover:underline" href={detailHref('stack', service.stackName)}>{service.stackName}</a>{/if}</Table.Cell>
+								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('service', service.id)}>{service.name}</a><div class="text-xs text-muted-foreground font-mono">{service.id.slice(0, 12)}</div>{#if service.stackName}<div class="mt-1 flex flex-wrap items-center gap-1"><Badge variant="outline" class="border-amber-600/30 bg-amber-500/10 text-amber-700 dark:text-amber-400">Stack-managed</Badge><a class="text-xs text-muted-foreground hover:text-foreground hover:underline" href={detailHref('stack', service.stackName)}>{service.stackName}</a></div>{/if}</Table.Cell>
 								<Table.Cell class="max-w-[28rem] truncate font-mono text-xs" title={service.image}>{service.image ?? '—'}</Table.Cell>
-								<Table.Cell><Badge variant="outline" class="capitalize">{service.mode.replace('-', ' ')}</Badge>{#if service.mode === 'global'}<div class="mt-1 max-w-40 text-xs text-muted-foreground">One task per eligible node</div>{/if}</Table.Cell>
+								<Table.Cell><Badge variant="outline" class="capitalize">{service.mode.replace('-', ' ')}</Badge>{#if service.mode === 'global'}<div class="mt-1 max-w-40 text-xs text-muted-foreground">One task per eligible node · no manual scale</div>{/if}</Table.Cell>
 								<Table.Cell>
 									{#if service.mode === 'replicated'}
-										<Badge variant={swarmStatusPresentation(hasReplicaMismatch(service) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(service) ? 'partial' : 'stable').className}">{service.runningTasks} / {service.desiredTasks ?? '—'}</Badge>
-										<div class="mt-1 text-xs text-muted-foreground">Running / desired</div>
+										<div class="flex items-center gap-1">
+											{#if data.capability.controlAvailable && $canAccess('swarm', 'update') && !isStackManagedSwarmService(service)}
+												<Button variant="outline" size="icon" class="h-7 w-7" onclick={() => scaleServiceBy(service, -1)} disabled={Boolean(pendingScaleFor(service.id)) || (service.desiredTasks ?? 0) <= 0} aria-label={`Scale ${service.name} down`}><Minus class="h-3.5 w-3.5" /></Button>
+											{/if}
+											<Badge variant={swarmStatusPresentation(hasReplicaMismatch(service) || pendingScaleFor(service.id) ? 'partial' : 'stable').variant} class="tabular-nums {swarmStatusPresentation(hasReplicaMismatch(service) || pendingScaleFor(service.id) ? 'partial' : 'stable').className}">{service.runningTasks} / {service.desiredTasks ?? '—'}</Badge>
+											{#if data.capability.controlAvailable && $canAccess('swarm', 'update') && !isStackManagedSwarmService(service)}
+												<Button variant="outline" size="icon" class="h-7 w-7" onclick={() => scaleServiceBy(service, 1)} disabled={Boolean(pendingScaleFor(service.id))} aria-label={`Scale ${service.name} up`}><Plus class="h-3.5 w-3.5" /></Button>
+											{/if}
+										</div>
+										<div class="mt-1 text-xs text-muted-foreground">Running / desired{#if pendingScaleFor(service.id)} · Pending target {pendingScaleFor(service.id)?.target}{:else if hasReplicaMismatch(service)} · Reconciling{/if}</div>
 									{:else if service.mode === 'global'}
-										<span class="text-xs text-muted-foreground">Managed by eligible nodes</span>
+										<span>{service.runningTasks} running</span><div class="text-xs text-muted-foreground">Managed by eligible nodes</div>
 									{:else}
 										<span>{service.runningTasks} running</span>{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} completed</div>{/if}
 									{/if}
@@ -971,12 +1022,9 @@
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<Table.Cell>
 										<div class="flex justify-end gap-2">
-											{#if canScaleSwarmService(service.mode)}
-												<Button variant="outline" size="sm" onclick={() => openScaleDialog(service)} disabled={actionPending}>
-													<SlidersHorizontal class="h-4 w-4" /> Scale
-												</Button>
-											{/if}
-											{#if service.mode === 'replicated' || service.mode === 'global'}
+											{#if service.stackName}
+												<Button variant="outline" size="sm" href={detailHref('stack', service.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
+											{:else if service.mode === 'replicated' || service.mode === 'global'}
 												<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
 													<RotateCw class="h-4 w-4" /> Restart
 												</Button>
@@ -1276,8 +1324,8 @@
 			<div class="max-h-36 space-y-2 overflow-auto rounded-md border p-3">
 				{#each replaceConfigSource?.services ?? [] as usage (usage.serviceId)}
 					<label class="flex items-start gap-3 text-sm">
-						<Checkbox checked={replacementServiceIds.includes(usage.serviceId)} onCheckedChange={(checked) => setReplacementService(usage.serviceId, checked === true)} disabled={resourcePending} />
-						<span class="min-w-0"><span class="font-medium">{usage.serviceName}</span>{#if usage.stackName}<span class="ml-2 text-xs text-muted-foreground">Stack: <a class="text-primary hover:underline" href={detailHref('stack', usage.stackName)}>{usage.stackName}</a></span><br /><span class="text-xs text-amber-600 dark:text-amber-400">This changes the live Service only. Update and redeploy the stored Stack definition before its next deployment.</span>{/if}</span>
+						<Checkbox checked={replacementServiceIds.includes(usage.serviceId)} onCheckedChange={(checked) => setReplacementService(usage.serviceId, checked === true)} disabled={resourcePending || Boolean(usage.stackName)} />
+						<span class="min-w-0"><span class="font-medium">{usage.serviceName}</span>{#if usage.stackName}<span class="ml-2 text-xs text-muted-foreground">Stack: <a class="text-primary hover:underline" href={detailHref('stack', usage.stackName)}>{usage.stackName}</a></span><br /><span class="text-xs text-amber-600 dark:text-amber-400">Stack-managed: edit the stored stack definition and redeploy it. Dockhand will not change this live Service reference directly.</span>{/if}</span>
 					</label>
 				{:else}
 					<p class="text-sm text-muted-foreground">This Config is not currently used by a Service.</p>
@@ -1299,30 +1347,11 @@
 <Dialog.Root bind:open={actionDialogOpen} onOpenChange={(open) => { if (!open) closeActionDialog(); }}>
 	<Dialog.Content class="max-w-md">
 		<Dialog.Header>
-			<Dialog.Title>{actionType === 'scale' ? 'Scale Swarm service' : 'Restart Swarm service'}</Dialog.Title>
+			<Dialog.Title>Restart Swarm service</Dialog.Title>
 			<Dialog.Description>
-				{#if actionType === 'scale'}
-					Change the desired replica count for <strong>{actionService?.name}</strong>. Swarm will reconcile the service to this value.
-				{:else}
-					Force-update <strong>{actionService?.name}</strong>? Swarm will replace all current service tasks using the existing service specification.
-				{/if}
+				Force-update <strong>{actionService?.name}</strong>? Swarm will replace all current service tasks using the existing service specification.
 			</Dialog.Description>
 		</Dialog.Header>
-		{#if actionType === 'scale'}
-			<div class="space-y-2">
-				<Label for="swarm-service-replicas">Replicas</Label>
-				<div class="flex items-center justify-center gap-2">
-					<Button type="button" variant="outline" size="icon" onclick={() => adjustScaleReplicas(-1)} disabled={actionPending || Number(scaleReplicas) <= 0} aria-label="Decrease replicas">
-						<Minus class="h-4 w-4" />
-					</Button>
-					<Input id="swarm-service-replicas" class="w-24 text-center font-medium tabular-nums" type="number" min="0" step="1" bind:value={scaleReplicas} disabled={actionPending} aria-label="Desired replicas" />
-					<Button type="button" variant="outline" size="icon" onclick={() => adjustScaleReplicas(1)} disabled={actionPending} aria-label="Increase replicas">
-						<Plus class="h-4 w-4" />
-					</Button>
-				</div>
-				<p class="text-center text-xs text-muted-foreground">Currently {actionService?.runningTasks ?? 0} running. Applies only to this replicated service.</p>
-			</div>
-		{/if}
 		{#if actionError}
 			<Alert.Root variant="destructive">
 				<TriangleAlert class="h-4 w-4" />
@@ -1331,9 +1360,9 @@
 		{/if}
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeActionDialog} disabled={actionPending}>Cancel</Button>
-			<Button onclick={confirmServiceAction} disabled={actionPending || (actionType === 'scale' && (!Number.isSafeInteger(Number(scaleReplicas)) || Number(scaleReplicas) < 0))}>
+			<Button onclick={confirmServiceAction} disabled={actionPending}>
 				{#if actionPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
-				{actionType === 'scale' ? 'Apply' : 'Restart service'}
+				Restart service
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>
