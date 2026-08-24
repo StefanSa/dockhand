@@ -23,6 +23,7 @@
 
 	let {
 		open = $bindable(false),
+		mode = 'edit',
 		service,
 		environmentId,
 		networks,
@@ -31,18 +32,21 @@
 		onSaved
 	}: {
 		open: boolean;
+		mode?: 'create' | 'edit';
 		service: SwarmServiceSummary | null;
 		environmentId: number | null;
 		networks: SwarmNetworkSummary[];
 		configs: SwarmConfigSummary[];
 		secrets: SwarmSecretSummary[];
-		onSaved: () => void | Promise<void>;
+		onSaved: (result: { id?: string; name: string; mode: 'replicated' | 'global' }) => void | Promise<void>;
 	} = $props();
 
 	let activeTab = $state('general');
 	let pending = $state(false);
 	let error = $state<string | null>(null);
-	let initializedServiceId = $state<string | null>(null);
+	let initializedKey = $state<string | null>(null);
+	let serviceName = $state('');
+	let serviceMode = $state<'replicated' | 'global'>('replicated');
 	let image = $state('');
 	let replicas = $state(0);
 	let endpointMode = $state<'vip' | 'dnsrr'>('vip');
@@ -75,6 +79,40 @@
 		return { parallelism: 1, delaySeconds: 0, failureAction: 'pause', monitorSeconds: 5, maxFailureRatio: 0, order: 'stop-first' };
 	}
 
+	function copyPolicy(policy: SwarmServiceUpdatePolicy | undefined): SwarmServiceUpdatePolicy {
+		return { ...(policy ?? defaultPolicy()) };
+	}
+
+	function resetForm(): void {
+		activeTab = 'general';
+		error = null;
+		serviceName = '';
+		serviceMode = 'replicated';
+		image = '';
+		replicas = 1;
+		endpointMode = 'vip';
+		command = '';
+		args = '';
+		environment = '';
+		stopGracePeriodSeconds = undefined;
+		ports = [];
+		mounts = [];
+		networkAttachments = [];
+		configReferences = [];
+		secretReferences = [];
+		constraints = '';
+		limitCores = undefined;
+		limitMemoryMb = undefined;
+		reservationCores = undefined;
+		reservationMemoryMb = undefined;
+		restartCondition = 'any';
+		restartDelaySeconds = undefined;
+		restartMaxAttempts = undefined;
+		restartWindowSeconds = undefined;
+		updatePolicy = defaultPolicy();
+		rollbackPolicy = defaultPolicy();
+	}
+
 	function lines(value: string[]): string {
 		return value.join('\n');
 	}
@@ -86,9 +124,11 @@
 	}
 
 	function initialize(current: SwarmServiceSummary): void {
-		initializedServiceId = current.id;
+		initializedKey = `edit:${current.id}`;
 		activeTab = 'general';
 		error = null;
+		serviceName = current.name;
+		serviceMode = current.mode === 'global' ? 'global' : 'replicated';
 		image = current.image ?? '';
 		replicas = current.mode === 'replicated' ? current.desiredTasks ?? 0 : 0;
 		endpointMode = current.endpointMode ?? 'vip';
@@ -96,11 +136,11 @@
 		args = lines(current.args);
 		environment = lines(current.environment);
 		stopGracePeriodSeconds = current.stopGracePeriodSeconds;
-		ports = structuredClone(current.ports);
-		mounts = structuredClone(current.mounts);
-		networkAttachments = structuredClone(current.networks);
-		configReferences = structuredClone(current.configs);
-		secretReferences = structuredClone(current.secrets);
+		ports = current.ports.map((port) => ({ ...port }));
+		mounts = current.mounts.map((mount) => ({ ...mount }));
+		networkAttachments = current.networks.map((network) => ({ ...network, aliases: [...network.aliases], driverOpts: { ...network.driverOpts } }));
+		configReferences = current.configs.map((reference) => ({ ...reference }));
+		secretReferences = current.secrets.map((reference) => ({ ...reference }));
 		constraints = lines(current.constraints);
 		limitCores = current.resources.limits.cores;
 		limitMemoryMb = current.resources.limits.memoryMb;
@@ -110,13 +150,18 @@
 		restartDelaySeconds = current.restartPolicy?.delaySeconds;
 		restartMaxAttempts = current.restartPolicy?.maxAttempts;
 		restartWindowSeconds = current.restartPolicy?.windowSeconds;
-		updatePolicy = structuredClone(current.updatePolicy ?? defaultPolicy());
-		rollbackPolicy = structuredClone(current.rollbackPolicy ?? defaultPolicy());
+		updatePolicy = copyPolicy(current.updatePolicy);
+		rollbackPolicy = copyPolicy(current.rollbackPolicy);
 	}
 
 	$effect(() => {
-		if (open && service && initializedServiceId !== service.id) initialize(service);
-		if (!open) initializedServiceId = null;
+		if (open && mode === 'create' && initializedKey !== 'create') {
+			resetForm();
+			initializedKey = 'create';
+		} else if (open && mode === 'edit' && service && initializedKey !== `edit:${service.id}`) {
+			initialize(service);
+		}
+		if (!open) initializedKey = null;
 	});
 
 	function addPort(): void {
@@ -159,12 +204,13 @@
 	}
 
 	async function save(): Promise<void> {
-		if (!service || !environmentId || pending) return;
+		if (!environmentId || pending || (mode === 'edit' && !service) || (mode === 'create' && !serviceName.trim())) return;
 		pending = true;
 		error = null;
+		const selectedMode = mode === 'create' ? serviceMode : service?.mode === 'global' ? 'global' : 'replicated';
 		const spec: SwarmServiceUpdateInput = {
 			image,
-			replicas: service.mode === 'replicated' ? Number(replicas) : null,
+			replicas: selectedMode === 'replicated' ? Number(replicas) : null,
 			command: parseLines(command, true),
 			args: parseLines(args, true),
 			environment: parseLines(environment),
@@ -191,17 +237,21 @@
 		};
 
 		try {
-			const response = await fetch(`/api/swarm/services/${encodeURIComponent(service.id)}?env=${environmentId}`, {
+			const response = await fetch(mode === 'create'
+				? `/api/swarm/services?env=${environmentId}`
+				: `/api/swarm/services/${encodeURIComponent(service!.id)}?env=${environmentId}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'update', spec })
+				body: JSON.stringify(mode === 'create'
+					? { name: serviceName.trim(), spec }
+					: { action: 'update', spec })
 			});
 			const body = await response.json().catch(() => ({}));
-			if (!response.ok) throw new Error(body.error || 'Failed to update Swarm service');
+			if (!response.ok) throw new Error(body.error || `Failed to ${mode === 'create' ? 'create' : 'update'} Swarm service`);
 			open = false;
-			await onSaved();
+			await onSaved({ id: body.id, name: mode === 'create' ? serviceName.trim() : service!.name, mode: selectedMode });
 		} catch (saveError) {
-			error = saveError instanceof Error ? saveError.message : 'Failed to update Swarm service';
+			error = saveError instanceof Error ? saveError.message : `Failed to ${mode === 'create' ? 'create' : 'update'} Swarm service`;
 		} finally {
 			pending = false;
 		}
@@ -211,8 +261,8 @@
 <Dialog.Root bind:open>
 	<Dialog.Content class="flex h-[min(92vh,58rem)] max-w-6xl flex-col">
 		<Dialog.Header>
-			<Dialog.Title>Edit Swarm service “{service?.name}”</Dialog.Title>
-			<Dialog.Description>Docker applies the saved ServiceSpec as a rolling update. One item per line is one Docker argument or environment entry; no shell parsing is performed.</Dialog.Description>
+			<Dialog.Title>{mode === 'create' ? 'Create standalone Swarm service' : `Edit Swarm service “${service?.name}”`}</Dialog.Title>
+			<Dialog.Description>{mode === 'create' ? 'Create a service directly on this Swarm. It will not be managed by a stack file.' : 'Docker applies the saved ServiceSpec as a rolling update.'} One item per line is one Docker argument or environment entry; no shell parsing is performed.</Dialog.Description>
 		</Dialog.Header>
 		<Tabs.Root bind:value={activeTab} class="flex min-h-0 flex-1 flex-col gap-3">
 			<Tabs.List class="h-auto flex-wrap justify-start">
@@ -225,10 +275,11 @@
 			</Tabs.List>
 			<div class="min-h-0 flex-1 overflow-auto rounded-md border p-4">
 				<Tabs.Content value="general" class="mt-0 space-y-4">
+					{#if mode === 'create'}<div class="space-y-2"><Label for="service-name">Service name</Label><Input id="service-name" bind:value={serviceName} disabled={pending} autocomplete="off" placeholder="my-service" /></div>{/if}
 					<div class="space-y-2"><Label for="service-image">Image</Label><Input id="service-image" bind:value={image} disabled={pending} /></div>
 					<div class="grid gap-4 sm:grid-cols-2">
-						<div><Label>Mode</Label><Input value={service?.mode === 'global' ? 'Global' : 'Replicated'} disabled /></div>
-						{#if service?.mode === 'replicated'}<div><Label for="service-replicas">Desired replicas</Label><Input id="service-replicas" type="number" min="0" step="1" bind:value={replicas} disabled={pending} /></div>{/if}
+						<div><Label>Mode</Label>{#if mode === 'create'}<Select.Root type="single" bind:value={serviceMode}><Select.Trigger class="w-full">{serviceMode === 'global' ? 'Global' : 'Replicated'}</Select.Trigger><Select.Content><Select.Item value="replicated">Replicated</Select.Item><Select.Item value="global">Global</Select.Item></Select.Content></Select.Root>{:else}<Input value={serviceMode === 'global' ? 'Global' : 'Replicated'} disabled />{/if}</div>
+						{#if serviceMode === 'replicated'}<div><Label for="service-replicas">Desired replicas</Label><Input id="service-replicas" type="number" min="0" step="1" bind:value={replicas} disabled={pending} /></div>{/if}
 					</div>
 					<div class="space-y-2"><Label>Endpoint mode</Label><Select.Root type="single" bind:value={endpointMode}><Select.Trigger class="w-full">{endpointMode}</Select.Trigger><Select.Content><Select.Item value="vip">VIP</Select.Item><Select.Item value="dnsrr">DNS round-robin</Select.Item></Select.Content></Select.Root></div>
 				</Tabs.Content>
@@ -279,6 +330,6 @@
 			</div>
 		</Tabs.Root>
 		{#if error}<p class="text-sm text-destructive">{error}</p>{/if}
-		<Dialog.Footer><Button variant="outline" onclick={() => open = false} disabled={pending}>Cancel</Button><Button onclick={save} disabled={pending || !image.trim()}>{#if pending}<Loader2 class="h-4 w-4 animate-spin" />{/if} Save & update</Button></Dialog.Footer>
+		<Dialog.Footer><Button variant="outline" onclick={() => open = false} disabled={pending}>Cancel</Button><Button onclick={save} disabled={pending || !image.trim() || mode === 'create' && !serviceName.trim()}>{#if pending}<Loader2 class="h-4 w-4 animate-spin" />{/if} {mode === 'create' ? 'Create service' : 'Save & update'}</Button></Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>

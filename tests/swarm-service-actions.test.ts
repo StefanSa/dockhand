@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
+	parseSwarmServiceCreateInput,
 	parseSwarmServiceUpdateInput,
+	performSwarmServiceCreate,
+	performSwarmServiceDelete,
 	performSwarmServiceAction,
 	SwarmServiceActionError
 } from '../src/lib/server/swarm-service';
@@ -135,6 +138,56 @@ describe('Swarm service actions', () => {
 			() => parseSwarmServiceUpdateInput({ ...editedSpec(), ports: [{ protocol: 'tcp', targetPort: 70000, publishMode: 'ingress' }] }),
 			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
 		);
+		assert.throws(
+			() => parseSwarmServiceCreateInput({ name: 'invalid service name', spec: editedSpec() }),
+			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 400
+		);
+	});
+
+	it('creates replicated and global standalone services from the editor spec', async () => {
+		for (const [name, replicas] of [['created-replicated', 2], ['created-global', null]] as const) {
+			const calls: Array<{ path: string; options?: RequestInit }> = [];
+			const result = await performSwarmServiceCreate(manager, { name, spec: editedSpec(replicas) }, async (path, options) => {
+				calls.push({ path, options });
+				return { ID: `${name}-id`, Warnings: ['created'] };
+			});
+			assert.equal(calls.length, 1);
+			assert.equal(calls[0].path, '/services/create');
+			assert.equal(calls[0].options?.method, 'POST');
+			const spec = JSON.parse(String(calls[0].options?.body));
+			assert.equal(spec.Name, name);
+			assert.equal(spec.TaskTemplate.ContainerSpec.Image, 'nginx:1.29-alpine');
+			assert.equal(spec.EndpointSpec.Ports[0].PublishedPort, 18080);
+			if (replicas === null) {
+				assert.deepEqual(spec.Mode, { Global: {} });
+			} else {
+				assert.equal(spec.Mode.Replicated.Replicas, replicas);
+			}
+			assert.deepEqual(result, { id: `${name}-id`, warnings: ['created'] });
+		}
+	});
+
+	it('deletes only standalone services after inspecting their source of truth', async () => {
+		const calls: Array<{ path: string; options?: RequestInit }> = [];
+		const result = await performSwarmServiceDelete(manager, 'service/id', async (path, options) => {
+			calls.push({ path, options });
+			return options ? undefined : service({ Replicated: { Replicas: 1 } });
+		});
+		assert.deepEqual(calls.map((call) => call.path), ['/services/service%2Fid', '/services/service%2Fid']);
+		assert.equal(calls[1].options?.method, 'DELETE');
+		assert.deepEqual(result, { id: 'service/id' });
+
+		let stackRequests = 0;
+		await assert.rejects(
+			performSwarmServiceDelete(manager, 'stack-service', async () => {
+				stackRequests++;
+				const current = service({ Replicated: { Replicas: 1 } });
+				(current.Spec as any).Labels['com.docker.stack.namespace'] = 'platform';
+				return current;
+			}),
+			(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 409 && /stack workflow/i.test(error.message)
+		);
+		assert.equal(stackRequests, 1);
 	});
 
 	it('replaces only the selected Config reference while preserving its target and the complete Service spec', async () => {
@@ -223,6 +276,17 @@ describe('Swarm service actions', () => {
 				}),
 				(error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 409
 			);
+			assert.equal(requests, 0);
+		});
+
+		it(`rejects standalone service create and delete on ${capability.kind}`, async () => {
+			let requests = 0;
+			for (const operation of [
+				() => performSwarmServiceCreate(capability, { name: 'blocked', spec: editedSpec() }, async () => { requests++; return {}; }),
+				() => performSwarmServiceDelete(capability, 'blocked', async () => { requests++; return {}; })
+			]) {
+				await assert.rejects(operation, (error: unknown) => error instanceof SwarmServiceActionError && error.statusCode === 409);
+			}
 			assert.equal(requests, 0);
 		});
 	}

@@ -26884,6 +26884,212 @@
         }
       }
     },
+    "/api/swarm/services": {
+      "post": {
+        "operationId": "post_api_swarm_services",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Create a standalone Swarm service on a manager",
+        "parameters": [
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "warnings": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id",
+                    "warnings"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string",
+                  "warnings": [
+                    "string"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid service name or ServiceSpec"
+          },
+          "403": {
+            "description": "Caller lacks swarm:update or environment access"
+          },
+          "404": {
+            "description": "Environment not found"
+          },
+          "409": {
+            "description": "Environment is not a controllable Swarm manager, or the name already exists"
+          },
+          "502": {
+            "description": "Docker rejected or failed the service creation"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "spec": {
+                    "type": "object",
+                    "properties": {
+                      "image": {
+                        "type": "string"
+                      },
+                      "replicas": {
+                        "type": "integer"
+                      },
+                      "command": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "args": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "environment": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "ports": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "mounts": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "networks": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "configs": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "secrets": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "constraints": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "resources": {
+                        "type": "string"
+                      },
+                      "restartPolicy": {
+                        "type": "string"
+                      },
+                      "updatePolicy": {
+                        "type": "string"
+                      },
+                      "rollbackPolicy": {
+                        "type": "string"
+                      },
+                      "stopGracePeriodSeconds": {
+                        "type": "number"
+                      },
+                      "endpointMode": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "image"
+                    ]
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "example": {
+                "name": "web",
+                "spec": {
+                  "image": "nginx:alpine",
+                  "replicas": 1,
+                  "command": [],
+                  "args": [],
+                  "environment": [],
+                  "ports": [],
+                  "mounts": [],
+                  "networks": [],
+                  "configs": [],
+                  "secrets": [],
+                  "constraints": [],
+                  "resources": {
+                    "limits": {},
+                    "reservations": {}
+                  },
+                  "endpointMode": "vip"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/swarm/services/{id}": {
       "post": {
         "operationId": "post_api_swarm_services_id",
@@ -27097,6 +27303,84 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "delete_api_swarm_services_id",
+        "tags": [
+          "swarm"
+        ],
+        "summary": "Delete a standalone Swarm service",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Swarm service ID (from GET /api/swarm)"
+          },
+          {
+            "name": "env",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Manager environment ID (from GET /api/environments)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "success",
+                    "id"
+                  ]
+                },
+                "example": {
+                  "success": true,
+                  "id": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid service ID or environment ID"
+          },
+          "403": {
+            "description": "Caller lacks swarm:update or environment access"
+          },
+          "404": {
+            "description": "Environment or service not found"
+          },
+          "409": {
+            "description": "Environment is not a controllable Swarm manager, or the service is stack-managed"
+          },
+          "502": {
+            "description": "Docker rejected or failed the service deletion"
+          }
+        },
+        "security": [
+          {
+            "cookieAuth": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ]
       }
     },
     "/api/swarm/stacks/{name}": {

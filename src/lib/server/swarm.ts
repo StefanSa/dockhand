@@ -11,7 +11,12 @@ import {
 	type SwarmSecretSummary
 } from '$lib/types/swarm';
 import {
+	performSwarmServiceCreate,
+	performSwarmServiceDelete,
 	performSwarmServiceAction,
+	type SwarmServiceCreateInput,
+	type SwarmServiceCreateResult,
+	type SwarmServiceDeleteResult,
 	type SwarmServiceAction,
 	type SwarmServiceActionResult
 } from './swarm-service';
@@ -214,6 +219,30 @@ export async function updateSwarmService(
 		serviceId,
 		action,
 		(path, options = {}) => dockerJsonRequest<unknown>(path, options, environmentId)
+	);
+}
+
+export async function createSwarmService(
+	environmentId: number,
+	input: SwarmServiceCreateInput
+): Promise<SwarmServiceCreateResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmServiceCreate(
+		capability,
+		input,
+		(path, options = {}) => dockerJsonRequest<unknown>(path, options, environmentId)
+	);
+}
+
+export async function deleteSwarmService(
+	environmentId: number,
+	serviceId: string
+): Promise<SwarmServiceDeleteResult> {
+	const capability = await getSwarmCapability(environmentId, true);
+	return performSwarmServiceDelete(
+		capability,
+		serviceId,
+		(path, options = {}) => swarmResourceRequest(environmentId, path, options)
 	);
 }
 

@@ -42,8 +42,27 @@ describe('Swarm UX refinement UI gates', () => {
 			'Overlay networks', 'Mounts', 'Configs', 'Secrets', 'Placement constraints', 'CPU limit',
 			'Restart condition', 'Update policy', 'Rollback policy'
 		]) assert.match(serviceEditor, new RegExp(label));
-		assert.match(serviceEditor, /service\.mode === 'replicated'/);
+		assert.match(serviceEditor, /serviceMode === 'replicated'/);
 		assert.doesNotMatch(serviceEditor, /secret\.data|secretValue|Spec\.Data/);
+	});
+
+	it('keeps the shared service editor interactive for proxied read-model data', () => {
+		assert.doesNotMatch(serviceEditor, /structuredClone/);
+		assert.match(serviceEditor, /current\.ports\.map\(\(port\) => \(\{ \.\.\.port \}\)\)/);
+		assert.match(serviceEditor, /<Tabs\.Root bind:value=\{activeTab\}/);
+		assert.match(serviceEditor, /<Dialog\.Root bind:open>/);
+		assert.match(serviceEditor, /onclick=\{\(\) => open = false\}[^>]*>Cancel/);
+	});
+
+	it('offers manager-only standalone service creation through the shared editor', () => {
+		assert.match(swarmPage, /capability\.kind === 'swarm-manager'[\s\S]*?\$canAccess\('swarm', 'update'\)[\s\S]*?Create service/);
+		assert.match(swarmPage, /openCreateServiceEditor/);
+		assert.match(serviceEditor, /mode === 'create'/);
+		assert.match(serviceEditor, /\/api\/swarm\/services\?env=/);
+		assert.match(serviceEditor, /Service name/);
+		assert.match(serviceEditor, /value="global">Global/);
+		assert.match(swarmPage, /openDeleteServiceDialog\(service\)/);
+		assert.match(swarmPage, /if \(isStackManagedSwarmService\(service\)\) return/);
 	});
 
 	it('uses real anchors for Service to Task to Node deep links', () => {

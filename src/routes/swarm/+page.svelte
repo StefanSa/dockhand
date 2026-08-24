@@ -62,7 +62,12 @@
 	let actionError = $state<string | null>(null);
 	let pendingScales = $state<Record<string, PendingScale>>({});
 	let serviceEditorOpen = $state(false);
+	let serviceEditorMode = $state<'create' | 'edit'>('edit');
 	let serviceEditorService = $state<SwarmServiceSummary | null>(null);
+	let deleteServiceDialogOpen = $state(false);
+	let serviceToDelete = $state<SwarmServiceSummary | null>(null);
+	let deleteServicePending = $state(false);
+	let deleteServiceError = $state<string | null>(null);
 	let stackDialogOpen = $state(false);
 	let stackEditing = $state(false);
 	let stackName = $state('');
@@ -527,8 +532,55 @@
 
 	function openServiceEditor(service: SwarmServiceSummary): void {
 		if (isStackManagedSwarmService(service) || (service.mode !== 'replicated' && service.mode !== 'global')) return;
+		serviceEditorMode = 'edit';
 		serviceEditorService = service;
 		serviceEditorOpen = true;
+	}
+
+	function openCreateServiceEditor(): void {
+		serviceEditorMode = 'create';
+		serviceEditorService = null;
+		serviceEditorOpen = true;
+	}
+
+	function openDeleteServiceDialog(service: SwarmServiceSummary): void {
+		if (isStackManagedSwarmService(service)) return;
+		serviceToDelete = service;
+		deleteServiceError = null;
+		deleteServiceDialogOpen = true;
+	}
+
+	function closeDeleteServiceDialog(): void {
+		if (deleteServicePending) return;
+		deleteServiceDialogOpen = false;
+		serviceToDelete = null;
+		deleteServiceError = null;
+	}
+
+	async function confirmDeleteService(): Promise<void> {
+		if (!environmentId || !serviceToDelete || deleteServicePending) return;
+		if (isStackManagedSwarmService(serviceToDelete)) {
+			deleteServiceError = 'This Service is managed by a Swarm stack. Remove it through the stored stack workflow.';
+			return;
+		}
+		deleteServicePending = true;
+		deleteServiceError = null;
+		try {
+			const response = await fetch(`/api/swarm/services/${encodeURIComponent(serviceToDelete.id)}?env=${environmentId}`, { method: 'DELETE' });
+			const body = await response.json().catch(() => ({}));
+			if (!response.ok) throw new Error(body.error || 'Failed to delete Swarm service');
+			const name = serviceToDelete.name;
+			deleteServiceDialogOpen = false;
+			serviceToDelete = null;
+			toast.success(`Swarm service ${name} deleted`);
+			if (detail?.kind === 'service') await goto(swarmTabHref('services'), { replaceState: true, noScroll: true });
+			await load(true);
+		} catch (deleteFailure) {
+			deleteServiceError = deleteFailure instanceof Error ? deleteFailure.message : 'Failed to delete Swarm service';
+			toast.error(deleteServiceError);
+		} finally {
+			deleteServicePending = false;
+		}
 	}
 
 	function closeActionDialog(): void {
@@ -704,7 +756,11 @@
 			error = null;
 			closeActionDialog();
 			serviceEditorOpen = false;
+			serviceEditorMode = 'edit';
 			serviceEditorService = null;
+			deleteServiceDialogOpen = false;
+			serviceToDelete = null;
+			deleteServiceError = null;
 			closeNodeActionDialog();
 			closeStackDialog();
 			closeResourceDialog();
@@ -740,6 +796,9 @@
 		</PageHeader>
 		<div class="flex items-center gap-2">
 			{#if data?.capability.kind === 'swarm-manager' && data.capability.controlAvailable && $canAccess('swarm', 'update')}
+				<Button size="sm" variant="outline" onclick={openCreateServiceEditor}>
+					<Plus class="h-4 w-4" /> Create service
+				</Button>
 				<Button size="sm" onclick={openCreateStackDialog} disabled={stackPending}>
 					<Plus class="h-4 w-4" /> Deploy stack
 				</Button>
@@ -846,6 +905,7 @@
 									{:else if data.capability.controlAvailable && $canAccess('swarm', 'update') && (selectedService.mode === 'replicated' || selectedService.mode === 'global')}
 										<Button size="sm" onclick={() => openServiceEditor(selectedService)}><Pencil class="h-4 w-4" /> Edit service</Button>
 										<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>
+										<Button size="sm" variant="destructive" onclick={() => openDeleteServiceDialog(selectedService)}><Trash2 class="h-4 w-4" /> Delete</Button>
 									{/if}
 								</div>
 							</div>
@@ -1041,6 +1101,7 @@
 											<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
 													<RotateCw class="h-4 w-4" /> Restart
 												</Button>
+											<Button variant="destructive" size="sm" onclick={() => openDeleteServiceDialog(service)} disabled={deleteServicePending}><Trash2 class="h-4 w-4" /> Delete</Button>
 											{/if}
 										</div>
 									</Table.Cell>
@@ -1205,16 +1266,33 @@
 
 <SwarmServiceEditorModal
 	bind:open={serviceEditorOpen}
+	mode={serviceEditorMode}
 	service={serviceEditorService}
 	{environmentId}
 	networks={data?.networks ?? []}
 	configs={data?.configs ?? []}
 	secrets={data?.secrets ?? []}
-	onSaved={async () => {
-		toast.success('Swarm service update submitted');
+	onSaved={async (result) => {
+		const created = serviceEditorMode === 'create';
+		toast.success(created ? `Swarm service ${result.name} created` : 'Swarm service update submitted');
 		await load(true);
+		if (created && result.id) await goto(detailHref('service', result.id), { noScroll: true });
 	}}
 />
+
+<Dialog.Root bind:open={deleteServiceDialogOpen} onOpenChange={(open) => { if (!open) closeDeleteServiceDialog(); }}>
+	<Dialog.Content class="max-w-lg">
+		<Dialog.Header>
+			<Dialog.Title>Delete standalone service “{serviceToDelete?.name}”?</Dialog.Title>
+			<Dialog.Description>Docker will stop all tasks for this service and remove the service definition. This does not remove images, volumes, Configs, or Secrets.</Dialog.Description>
+		</Dialog.Header>
+		{#if deleteServiceError}<Alert.Root variant="destructive"><TriangleAlert class="h-4 w-4" /><Alert.Description>{deleteServiceError}</Alert.Description></Alert.Root>{/if}
+		<Dialog.Footer>
+			<Button variant="outline" onclick={closeDeleteServiceDialog} disabled={deleteServicePending}>Cancel</Button>
+			<Button variant="destructive" onclick={confirmDeleteService} disabled={deleteServicePending}>{#if deleteServicePending}<Loader2 class="h-4 w-4 animate-spin" />{/if} Delete service</Button>
+		</Dialog.Footer>
+	</Dialog.Content>
+</Dialog.Root>
 
 <Dialog.Root bind:open={nodeDialogOpen} onOpenChange={(open) => { if (!open) closeNodeActionDialog(); }}>
 	<Dialog.Content class="max-w-lg">

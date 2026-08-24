@@ -27,6 +27,20 @@ export interface SwarmServiceActionResult {
 	warnings: string[];
 }
 
+export interface SwarmServiceCreateInput {
+	name: string;
+	spec: SwarmServiceUpdateInput;
+}
+
+export interface SwarmServiceCreateResult {
+	id: string;
+	warnings: string[];
+}
+
+export interface SwarmServiceDeleteResult {
+	id: string;
+}
+
 type SwarmRequest = (path: string, options?: RequestInit) => Promise<unknown>;
 
 export class SwarmServiceActionError extends Error {
@@ -220,6 +234,16 @@ export function parseSwarmServiceUpdateInput(value: unknown): SwarmServiceUpdate
 	};
 }
 
+export function parseSwarmServiceCreateInput(value: unknown): SwarmServiceCreateInput {
+	if (!isRecord(value)) invalid('Service definition is required');
+	if (typeof value.name !== 'string') invalid('Service name is required');
+	const name = value.name.trim();
+	if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(name)) {
+		invalid('Service name must be 1-255 characters and contain only letters, numbers, dots, underscores, or hyphens');
+	}
+	return { name, spec: parseSwarmServiceUpdateInput(value.spec) };
+}
+
 function serviceVersion(value: unknown): number {
 	if (!isRecord(value) || !isRecord(value.Version) || !Number.isSafeInteger(value.Version.Index)) {
 		throw new SwarmServiceActionError('Docker returned an invalid service version', 502);
@@ -232,6 +256,13 @@ function serviceSpec(value: unknown): Record<string, any> {
 		throw new SwarmServiceActionError('Docker returned an invalid service specification', 502);
 	}
 	return value.Spec;
+}
+
+function serviceStackNamespace(spec: Record<string, any>): string {
+	const labels = isRecord(spec.Labels) ? spec.Labels : {};
+	return typeof labels['com.docker.stack.namespace'] === 'string'
+		? labels['com.docker.stack.namespace'].trim()
+		: '';
 }
 
 function nanoseconds(seconds: number | undefined): number | undefined {
@@ -361,13 +392,19 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 	};
 }
 
+function prepareCreatedServiceSpec(input: SwarmServiceCreateInput): Record<string, any> {
+	const spec = prepareEditedServiceSpec({
+		TaskTemplate: { ContainerSpec: {}, Placement: {}, Resources: {} },
+		Mode: input.spec.replicas === null ? { Global: {} } : { Replicated: {} },
+		EndpointSpec: {}
+	}, input.spec);
+	return { ...spec, Name: input.name };
+}
+
 function prepareServiceSpec(value: unknown, action: SwarmServiceAction): Record<string, any> {
 	const spec = serviceSpec(value);
 	const mode = isRecord(spec.Mode) ? spec.Mode : {};
-	const labels = isRecord(spec.Labels) ? spec.Labels : {};
-	const stackName = typeof labels['com.docker.stack.namespace'] === 'string'
-		? labels['com.docker.stack.namespace'].trim()
-		: '';
+	const stackName = serviceStackNamespace(spec);
 	if (stackName) {
 		throw new SwarmServiceActionError(
 			`Service is managed by Swarm stack "${stackName}". Update the stored stack definition and redeploy it instead of changing the live service.`,
@@ -475,4 +512,48 @@ export async function performSwarmServiceAction(
 		: [];
 
 	return { action: action.type, version, warnings };
+}
+
+export async function performSwarmServiceCreate(
+	capability: SwarmCapability,
+	input: SwarmServiceCreateInput,
+	request: SwarmRequest
+): Promise<SwarmServiceCreateResult> {
+	if (capability.kind !== 'swarm-manager' || capability.controlAvailable !== true) {
+		throw new SwarmServiceActionError('Creating a Swarm service requires a manager endpoint', 409);
+	}
+
+	const response = await request('/services/create', {
+		method: 'POST',
+		body: JSON.stringify(prepareCreatedServiceSpec(input))
+	});
+	if (!isRecord(response) || typeof response.ID !== 'string' || !response.ID) {
+		throw new SwarmServiceActionError('Docker returned an invalid service creation response', 502);
+	}
+	const warnings = Array.isArray(response.Warnings)
+		? response.Warnings.filter((warning: unknown): warning is string => typeof warning === 'string')
+		: [];
+	return { id: response.ID, warnings };
+}
+
+export async function performSwarmServiceDelete(
+	capability: SwarmCapability,
+	serviceId: string,
+	request: SwarmRequest
+): Promise<SwarmServiceDeleteResult> {
+	if (capability.kind !== 'swarm-manager' || capability.controlAvailable !== true) {
+		throw new SwarmServiceActionError('Deleting a Swarm service requires a manager endpoint', 409);
+	}
+
+	const encodedId = encodeURIComponent(serviceId);
+	const spec = serviceSpec(await request(`/services/${encodedId}`));
+	const stackName = serviceStackNamespace(spec);
+	if (stackName) {
+		throw new SwarmServiceActionError(
+			`Service is managed by Swarm stack "${stackName}". Remove it through the stored stack workflow instead.`,
+			409
+		);
+	}
+	await request(`/services/${encodedId}`, { method: 'DELETE' });
+	return { id: serviceId };
 }
