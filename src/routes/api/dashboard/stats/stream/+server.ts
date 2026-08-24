@@ -26,6 +26,7 @@ import { prefersJSON, sseToJSON } from '$lib/server/sse';
 import type { EnvironmentStats } from '../+server';
 import { parseLabels } from '$lib/utils/label-colors';
 import { isEdgeConnected } from '$lib/server/hawser';
+import { getSwarmCapability } from '$lib/server/swarm';
 
 
 // Skip disk usage collection (Synology NAS performance fix)
@@ -142,7 +143,8 @@ const METRICS_HISTORY_WINDOW_MS = 15 * 60 * 1000;
 async function getEnvironmentStatsProgressive(
 	env: any,
 	onPartialUpdate: (stats: Partial<EnvironmentStats> & { id: number }) => void,
-	metricsPointCount: number
+	metricsPointCount: number,
+	refreshCapabilities: boolean
 ): Promise<EnvironmentStats> {
 	const envStats: EnvironmentStats = {
 		id: env.id,
@@ -284,6 +286,14 @@ async function getEnvironmentStatsProgressive(
 			});
 			return envStats;
 		}
+
+		// Capability detection runs alongside the dashboard data phases. Manual
+		// refreshes bypass the short-lived cache so role changes appear immediately.
+		const capabilityPromise = getSwarmCapability(env.id, refreshCapabilities).then((capability) => {
+			envStats.swarm = capability;
+			onPartialUpdate({ id: env.id, swarm: capability });
+			return capability;
+		});
 
 		// Helper to get valid size
 		const getValidSize = (size: number | undefined | null): number => {
@@ -521,6 +531,7 @@ async function getEnvironmentStatsProgressive(
 
 		// Wait for all to complete
 		await Promise.allSettled([
+			capabilityPromise,
 			containersPromise,
 			imagesPromise,
 			networksPromise,
@@ -570,7 +581,7 @@ async function getEnvironmentStatsProgressive(
  * resp-200: Server-Sent Events stream (text/event-stream), or a JSON payload when Accept application/json is requested
  * resp-403: Permission denied (requires the environments:view permission)
  */
-export const GET: RequestHandler = async ({ request, cookies }) => {
+export const GET: RequestHandler = async ({ request, cookies, url }) => {
 	const auth = await authorize(cookies);
 	if (auth.authEnabled && !await auth.can('environments', 'view')) {
 		return new Response(JSON.stringify({ error: 'Permission denied' }), {
@@ -580,6 +591,7 @@ export const GET: RequestHandler = async ({ request, cookies }) => {
 	}
 
 	let environments = await getEnvironments();
+	const refreshCapabilities = url.searchParams.get('refreshCapabilities') === 'true';
 
 	// In enterprise mode, filter environments by user's accessible environments
 	if (auth.authEnabled && auth.isEnterprise && auth.isAuthenticated && !auth.isAdmin) {
@@ -643,7 +655,7 @@ export const GET: RequestHandler = async ({ request, cookies }) => {
 					await getEnvironmentStatsProgressive(env, (partialStats) => {
 						// Send partial update as it arrives
 						safeEnqueue(`event: partial\ndata: ${JSON.stringify(partialStats)}\n\n`);
-					}, metricsPointCount);
+					}, metricsPointCount, refreshCapabilities);
 					// Send final complete stats event for this environment
 					safeEnqueue(`event: complete\ndata: ${JSON.stringify({ id: env.id })}\n\n`);
 				} catch (error) {

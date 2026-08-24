@@ -38,6 +38,8 @@
 	import { environments as environmentsStore } from '$lib/stores/environment';
 	import { dashboardData } from '$lib/stores/dashboard';
 	import { fetchEnvironmentDeleteCounts } from '$lib/utils/environment-delete';
+	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
+	import type { SwarmCapability } from '$lib/types/swarm';
 
 	interface Props {
 		editEnvId?: string | null;
@@ -102,6 +104,8 @@
 	let editingEnv = $state<Environment | null>(null);
 	let testResults = $state<{ [id: number]: TestResult }>({});
 	let testingEnvs = $state<Set<number>>(new Set());
+	let swarmCapabilities = $state<Record<number, SwarmCapability | null>>({});
+	let capabilityRequestSequence = 0;
 	let pruneStatus = $state<{ [id: number]: 'pruning' | 'success' | 'error' | null }>({});
 	let confirmPruneEnvId = $state<number | null>(null);
 	// Delete confirmation dialog state — shows the on-disk paths that will be
@@ -128,17 +132,34 @@
 	$effect(() => { labelColorOverrides.load(); });
 
 	// === Environment Functions ===
-	async function fetchEnvironments() {
+	async function fetchEnvironments(refreshCapabilities = false) {
 		envLoading = true;
 		try {
 			const response = await fetch('/api/environments');
 			environments = await response.json();
 			// Fetch scanner status for all environments in background
 			fetchAllEnvScannerStatus();
+			fetchAllSwarmCapabilities(refreshCapabilities);
 		} catch (error) {
 			console.error('Failed to fetch environments:', error);
 		} finally {
 			envLoading = false;
+		}
+	}
+
+	async function fetchAllSwarmCapabilities(refresh = false) {
+		const requestId = ++capabilityRequestSequence;
+		const entries = await Promise.all(environments.map(async (env) => {
+			try {
+				const response = await fetch(`/api/environments/${env.id}/capabilities?refresh=${refresh}`);
+				if (!response.ok) return [env.id, null] as const;
+				return [env.id, await response.json() as SwarmCapability] as const;
+			} catch {
+				return [env.id, null] as const;
+			}
+		}));
+		if (requestId === capabilityRequestSequence) {
+			swarmCapabilities = Object.fromEntries(entries);
 		}
 	}
 
@@ -169,7 +190,7 @@
 	}
 
 	async function handleSaved() {
-		await fetchEnvironments();
+		await fetchEnvironments(true);
 		// Refresh the global environments store so dropdown updates
 		environmentsStore.refresh();
 		// Invalidate dashboard cache so it refreshes on next visit
@@ -242,7 +263,8 @@
 		deleteCountsLoading = false;
 	}
 
-	async function testConnection(id: number) {
+	async function testConnection(id: number, notify = true) {
+		const environmentName = environments.find(env => env.id === id)?.name || 'Environment';
 		testingEnvs.add(id);
 		testingEnvs = new Set(testingEnvs);
 
@@ -253,9 +275,17 @@
 			const result = await response.json();
 			testResults[id] = result;
 			testResults = { ...testResults };
+			if (notify) {
+				if (result.success) {
+					toast.success(`${environmentName} connected`);
+				} else {
+					toast.error(`${environmentName}: ${result.error || 'Connection failed'}`);
+				}
+			}
 		} catch (error) {
 			testResults[id] = { success: false, error: 'Connection failed' };
 			testResults = { ...testResults };
+			if (notify) toast.error(`${environmentName}: Connection failed`);
 		}
 
 		testingEnvs.delete(id);
@@ -264,7 +294,7 @@
 
 	let testingAll = $state(false);
 
-	async function testAllConnections() {
+	async function testAllConnections(notify = true) {
 		if (testingAll || environments.length === 0) return;
 
 		testingAll = true;
@@ -275,22 +305,33 @@
 		environments.forEach(env => testingEnvs.add(env.id));
 		testingEnvs = new Set(testingEnvs);
 
-		await Promise.all(
+		const results = await Promise.all(
 			environments.map(async (env) => {
+				let result: TestResult;
 				try {
 					const response = await fetch(`/api/environments/${env.id}/test`, { method: 'POST' });
-					testResults[env.id] = await response.json();
+					result = await response.json();
 				} catch {
-					testResults[env.id] = { success: false, error: 'Connection failed' };
+					result = { success: false, error: 'Connection failed' };
 				} finally {
 					testingEnvs.delete(env.id);
 					testingEnvs = new Set(testingEnvs);
 				}
+				testResults[env.id] = result;
 				testResults = { ...testResults };
+				return result;
 			})
 		);
 
 		testingAll = false;
+		if (notify) {
+			const connected = results.filter(result => result.success).length;
+			if (connected === environments.length) {
+				toast.success(`${connected}/${environments.length} environments connected`);
+			} else {
+				toast.error(`${connected}/${environments.length} environments connected; ${environments.length - connected} failed`);
+			}
+		}
 	}
 
 	async function pruneSystem(id: number) {
@@ -304,7 +345,7 @@
 			if (response.ok) {
 				pruneStatus[id] = 'success';
 				// Re-test connection to update container/image counts
-				testConnection(id);
+				testConnection(id, false);
 			} else {
 				const errorData = await response.json().catch(() => ({}));
 				if (errorData.details?.includes('already running')) {
@@ -374,7 +415,7 @@
 		await fetchEnvironments();
 		fetchNotifications();
 		// Auto-test all environments after loading
-		testAllConnections();
+		testAllConnections(false);
 	});
 </script>
 
@@ -395,7 +436,7 @@
 				size="sm"
 				variant="outline"
 				class="min-w-[100px]"
-				onclick={testAllConnections}
+				onclick={() => testAllConnections()}
 				disabled={testingAll || environments.length === 0}
 			>
 				{#if testingAll}
@@ -405,7 +446,7 @@
 				{/if}
 				<span class="w-14">Test all</span>
 			</Button>
-			<Button size="sm" variant="outline" onclick={fetchEnvironments}>Refresh</Button>
+			<Button size="sm" variant="outline" onclick={() => fetchEnvironments(true)}>Refresh</Button>
 		</div>
 	</div>
 
@@ -457,6 +498,7 @@
 										</span>
 									{/if}
 									<span class="font-medium truncate">{env.name}</span>
+									<SwarmBadge capability={swarmCapabilities[env.id]} />
 								</div>
 							</Table.Cell>
 

@@ -404,9 +404,13 @@
 		}
 
 		try {
-			const response = await fetch('/api/dashboard/stats/stream', {
+			const response = await fetch(
+				isRefresh
+					? '/api/dashboard/stats/stream?refreshCapabilities=true'
+					: '/api/dashboard/stats/stream', {
 				signal: timeoutController.signal
-			});
+				}
+			);
 
 			clearTimeout(timeoutId);
 

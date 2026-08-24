@@ -8,6 +8,7 @@
 	import type { DataGridRowState, DataGridSortState } from '$lib/components/data-grid/types';
 	import type { ColumnConfig } from '$lib/types';
 	import type { TileItem } from '$lib/stores/dashboard';
+	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 
 	interface Props {
 		tiles: TileItem[];
@@ -132,6 +133,7 @@
 					<div class="flex items-center gap-2 min-w-0">
 						<EnvironmentIcon icon={s.icon || 'globe'} envId={s.id} class="w-4 h-4 text-muted-foreground shrink-0" />
 						<span class="font-medium truncate">{s.name}</span>
+						<SwarmBadge capability={s.swarm} />
 					</div>
 				{:else if tile.info}
 					<div class="flex items-center gap-2 min-w-0">
