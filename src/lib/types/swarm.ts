@@ -66,6 +66,7 @@ export interface SwarmServiceSummary {
 	command: string[];
 	args: string[];
 	environment: string[];
+	healthcheck?: SwarmServiceHealthcheck;
 	mode: 'replicated' | 'global' | 'replicated-job' | 'global-job' | 'unknown';
 	desiredTasks: number | null;
 	runningTasks: number;
@@ -138,6 +139,14 @@ export interface SwarmServiceRestartPolicy {
 	windowSeconds?: number;
 }
 
+export interface SwarmServiceHealthcheck {
+	test: string[];
+	intervalSeconds?: number;
+	timeoutSeconds?: number;
+	retries?: number;
+	startPeriodSeconds?: number;
+}
+
 export interface SwarmServiceUpdatePolicy {
 	parallelism: number;
 	delaySeconds: number;
@@ -149,10 +158,13 @@ export interface SwarmServiceUpdatePolicy {
 
 export interface SwarmServiceUpdateInput {
 	image: string;
+	mode: 'replicated' | 'global';
 	replicas: number | null;
 	command: string[];
 	args: string[];
 	environment: string[];
+	labels: Record<string, string>;
+	healthcheck?: SwarmServiceHealthcheck;
 	ports: SwarmServicePort[];
 	mounts: SwarmServiceMount[];
 	networks: SwarmServiceNetworkAttachment[];
@@ -483,6 +495,7 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 	const limits = isRecord(resources.Limits) ? resources.Limits : {};
 	const reservations = isRecord(resources.Reservations) ? resources.Reservations : {};
 	const restartPolicy = isRecord(taskTemplate.RestartPolicy) ? taskTemplate.RestartPolicy : null;
+	const healthcheck = isRecord(containerSpec.Healthcheck) ? containerSpec.Healthcheck : null;
 	const id = stringValue(service.ID) ?? '';
 	const serviceTasks = tasks.filter((task) => task.serviceId === id);
 
@@ -522,6 +535,13 @@ export function mapSwarmService(value: unknown, tasks: SwarmTaskSummary[] = []):
 		command: stringArray(containerSpec.Command),
 		args: stringArray(containerSpec.Args),
 		environment: stringArray(containerSpec.Env),
+		healthcheck: healthcheck && stringArray(healthcheck.Test).length > 0 ? {
+			test: stringArray(healthcheck.Test),
+			intervalSeconds: secondsFromNanoseconds(healthcheck.Interval),
+			timeoutSeconds: secondsFromNanoseconds(healthcheck.Timeout),
+			retries: numberValue(healthcheck.Retries),
+			startPeriodSeconds: secondsFromNanoseconds(healthcheck.StartPeriod)
+		} : undefined,
 		mode,
 		desiredTasks,
 		runningTasks,

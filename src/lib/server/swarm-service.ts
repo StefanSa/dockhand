@@ -1,6 +1,7 @@
 import type { SwarmCapability } from '$lib/types/swarm';
 import type {
 	SwarmServiceMount,
+	SwarmServiceHealthcheck,
 	SwarmServiceNetworkAttachment,
 	SwarmServicePort,
 	SwarmServiceResourceReference,
@@ -173,6 +174,25 @@ function parseResources(value: unknown): SwarmServiceResources {
 	return { limits: parseLimit(value.limits ?? {}, 'Resource limits'), reservations: parseLimit(value.reservations ?? {}, 'Resource reservations') };
 }
 
+function parseHealthcheck(value: unknown): SwarmServiceHealthcheck | undefined {
+	if (value === undefined || value === null) return undefined;
+	if (!isRecord(value)) invalid('Healthcheck is invalid');
+	const test = strings(value.test, 'Healthcheck test', true);
+	if (test.length === 0 || !['NONE', 'CMD', 'CMD-SHELL'].includes(test[0])) {
+		invalid('Healthcheck test must start with NONE, CMD, or CMD-SHELL');
+	}
+	if (test[0] === 'NONE' && test.length !== 1) invalid('Healthcheck NONE cannot have additional arguments');
+	return {
+		test,
+		intervalSeconds: finiteNumber(value.intervalSeconds, 'Healthcheck interval'),
+		timeoutSeconds: finiteNumber(value.timeoutSeconds, 'Healthcheck timeout'),
+		retries: value.retries === undefined || value.retries === null || value.retries === ''
+			? undefined
+			: integer(value.retries, 'Healthcheck retries'),
+		startPeriodSeconds: finiteNumber(value.startPeriodSeconds, 'Healthcheck start period')
+	};
+}
+
 function parseRestartPolicy(value: unknown): SwarmServiceRestartPolicy | undefined {
 	if (value === undefined || value === null) return undefined;
 	if (!isRecord(value) || !['none', 'on-failure', 'any'].includes(value.condition)) invalid('Restart policy is invalid');
@@ -206,7 +226,9 @@ function parseUpdatePolicy(value: unknown, label: string): SwarmServiceUpdatePol
 export function parseSwarmServiceUpdateInput(value: unknown): SwarmServiceUpdateInput {
 	if (!isRecord(value)) invalid('Service specification is required');
 	if (typeof value.image !== 'string' || !value.image.trim()) invalid('Image is required');
-	const replicas = value.replicas === null ? null : integer(value.replicas, 'Replicas');
+	const mode = value.mode ?? (value.replicas === null ? 'global' : 'replicated');
+	if (!['replicated', 'global'].includes(mode)) invalid('Service mode must be replicated or global');
+	const replicas = mode === 'global' ? null : integer(value.replicas, 'Replicas');
 	const environment = strings(value.environment, 'Environment');
 	for (const entry of environment) {
 		if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(entry)) invalid(`Environment entry "${entry}" must use KEY=VALUE syntax`);
@@ -215,10 +237,13 @@ export function parseSwarmServiceUpdateInput(value: unknown): SwarmServiceUpdate
 	if (!['vip', 'dnsrr'].includes(endpointMode)) invalid('Endpoint mode is invalid');
 	return {
 		image: value.image.trim(),
+		mode,
 		replicas,
 		command: strings(value.command, 'Command', true),
 		args: strings(value.args, 'Arguments', true),
 		environment,
+		labels: stringMap(value.labels ?? {}, 'Service labels'),
+		healthcheck: parseHealthcheck(value.healthcheck),
 		ports: parsePorts(value.ports),
 		mounts: parseMounts(value.mounts),
 		networks: parseNetworks(value.networks),
@@ -295,12 +320,14 @@ function dockerUpdatePolicy(policy: SwarmServiceUpdatePolicy | undefined): Recor
 
 function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmServiceUpdateInput): Record<string, any> {
 	const mode = isRecord(spec.Mode) ? spec.Mode : {};
-	if (isRecord(mode.Replicated)) {
-		if (input.replicas === null) throw new SwarmServiceActionError('Replicated services require a replica count', 400);
-	} else if (isRecord(mode.Global)) {
-		if (input.replicas !== null) throw new SwarmServiceActionError('Global services do not accept a replica count', 400);
-	} else {
+	if (!isRecord(mode.Replicated) && !isRecord(mode.Global)) {
 		throw new SwarmServiceActionError('Service editing is supported for replicated and global services only', 400);
+	}
+	if (input.mode === 'replicated' && input.replicas === null) {
+		throw new SwarmServiceActionError('Replicated services require a replica count', 400);
+	}
+	if (input.mode === 'global' && input.replicas !== null) {
+		throw new SwarmServiceActionError('Global services do not accept a replica count', 400);
 	}
 
 	const taskTemplate = isRecord(spec.TaskTemplate) ? spec.TaskTemplate : {};
@@ -310,6 +337,10 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 	const existingMounts = Array.isArray(containerSpec.Mounts) ? containerSpec.Mounts : [];
 	const existingNetworks = Array.isArray(taskTemplate.Networks) ? taskTemplate.Networks : [];
 	const endpointSpec = isRecord(spec.EndpointSpec) ? spec.EndpointSpec : {};
+	const existingHealthcheck = isRecord(containerSpec.Healthcheck) ? containerSpec.Healthcheck : {};
+	const existingLabels = isRecord(spec.Labels) ? spec.Labels : {};
+	const protectedLabels = Object.fromEntries(Object.entries(existingLabels)
+		.filter(([key]) => key === 'com.docker.stack.namespace'));
 
 	const nextMounts = input.mounts.map((mount) => {
 		const existing = existingMounts.find((candidate) => isRecord(candidate)
@@ -355,6 +386,7 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 
 	return {
 		...spec,
+		Labels: { ...input.labels, ...protectedLabels },
 		TaskTemplate: {
 			...taskTemplate,
 			ContainerSpec: {
@@ -363,6 +395,14 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 				Command: input.command,
 				Args: input.args,
 				Env: input.environment,
+				Healthcheck: input.healthcheck ? {
+					...existingHealthcheck,
+					Test: input.healthcheck.test,
+					Interval: nanoseconds(input.healthcheck.intervalSeconds),
+					Timeout: nanoseconds(input.healthcheck.timeoutSeconds),
+					Retries: input.healthcheck.retries,
+					StartPeriod: nanoseconds(input.healthcheck.startPeriodSeconds)
+				} : undefined,
 				Mounts: nextMounts,
 				Configs: input.configs.map((reference) => dockerResourceReference(reference, 'Config')),
 				Secrets: input.secrets.map((reference) => dockerResourceReference(reference, 'Secret')),
@@ -373,9 +413,9 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 			Resources: nextResources,
 			RestartPolicy: restartPolicy
 		},
-		Mode: isRecord(mode.Replicated)
-			? { ...mode, Replicated: { ...mode.Replicated, Replicas: input.replicas } }
-			: mode,
+		Mode: input.mode === 'replicated'
+			? { Replicated: { ...(isRecord(mode.Replicated) ? mode.Replicated : {}), Replicas: input.replicas } }
+			: { Global: { ...(isRecord(mode.Global) ? mode.Global : {}) } },
 		EndpointSpec: {
 			...endpointSpec,
 			Mode: input.endpointMode,
@@ -395,7 +435,7 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 function prepareCreatedServiceSpec(input: SwarmServiceCreateInput): Record<string, any> {
 	const spec = prepareEditedServiceSpec({
 		TaskTemplate: { ContainerSpec: {}, Placement: {}, Resources: {} },
-		Mode: input.spec.replicas === null ? { Global: {} } : { Replicated: {} },
+		Mode: input.spec.mode === 'global' ? { Global: {} } : { Replicated: {} },
 		EndpointSpec: {}
 	}, input.spec);
 	return { ...spec, Name: input.name };
@@ -405,7 +445,7 @@ function prepareServiceSpec(value: unknown, action: SwarmServiceAction): Record<
 	const spec = serviceSpec(value);
 	const mode = isRecord(spec.Mode) ? spec.Mode : {};
 	const stackName = serviceStackNamespace(spec);
-	if (stackName) {
+	if (stackName && action.type !== 'update') {
 		throw new SwarmServiceActionError(
 			`Service is managed by Swarm stack "${stackName}". Update the stored stack definition and redeploy it instead of changing the live service.`,
 			409

@@ -10,8 +10,8 @@ import { parseSwarmServiceCreateInput, SwarmServiceActionError } from '$lib/serv
  * @openapi
  * summary: Create a standalone Swarm service on a manager
  * query: env:integer! Manager environment ID (from GET /api/environments)
- * body: {name:string!, spec:{image:string!, replicas:integer, command:array<string>, args:array<string>, environment:array<string>, ports:array<object>, mounts:array<object>, networks:array<object>, configs:array<object>, secrets:array<object>, constraints:array<string>, resources:object, restartPolicy:object, updatePolicy:object, rollbackPolicy:object, stopGracePeriodSeconds:number, endpointMode:string}}
- * body-example: {"name":"web","spec":{"image":"nginx:alpine","replicas":1,"command":[],"args":[],"environment":[],"ports":[],"mounts":[],"networks":[],"configs":[],"secrets":[],"constraints":[],"resources":{"limits":{},"reservations":{}},"endpointMode":"vip"}}
+ * body: {name:string!, spec:{image:string!, mode:string!, replicas:integer, command:array<string>, args:array<string>, environment:array<string>, labels:object, healthcheck:object, ports:array<object>, mounts:array<object>, networks:array<object>, configs:array<object>, secrets:array<object>, constraints:array<string>, resources:object, restartPolicy:object, updatePolicy:object, rollbackPolicy:object, stopGracePeriodSeconds:number, endpointMode:string}}
+ * body-example: {"name":"web","spec":{"image":"nginx:alpine","mode":"replicated","replicas":1,"command":[],"args":[],"environment":[],"labels":{},"ports":[],"mounts":[],"networks":[],"configs":[],"secrets":[],"constraints":[],"resources":{"limits":{},"reservations":{}},"endpointMode":"vip"}}
  * resp-201: {success:boolean!, id:string!, warnings:array<string>!}
  * resp-400: Invalid service name or ServiceSpec
  * resp-403: Caller lacks swarm:update or environment access

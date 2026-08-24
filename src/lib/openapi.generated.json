@@ -26979,6 +26979,9 @@
                       "image": {
                         "type": "string"
                       },
+                      "mode": {
+                        "type": "string"
+                      },
                       "replicas": {
                         "type": "integer"
                       },
@@ -26999,6 +27002,12 @@
                         "items": {
                           "type": "string"
                         }
+                      },
+                      "labels": {
+                        "type": "string"
+                      },
+                      "healthcheck": {
+                        "type": "string"
                       },
                       "ports": {
                         "type": "array",
@@ -27056,7 +27065,8 @@
                       }
                     },
                     "required": [
-                      "image"
+                      "image",
+                      "mode"
                     ]
                   }
                 },
@@ -27068,10 +27078,12 @@
                 "name": "web",
                 "spec": {
                   "image": "nginx:alpine",
+                  "mode": "replicated",
                   "replicas": 1,
                   "command": [],
                   "args": [],
                   "environment": [],
+                  "labels": {},
                   "ports": [],
                   "mounts": [],
                   "networks": [],
@@ -27202,6 +27214,9 @@
                       "image": {
                         "type": "string"
                       },
+                      "mode": {
+                        "type": "string"
+                      },
                       "replicas": {
                         "type": "integer"
                       },
@@ -27222,6 +27237,12 @@
                         "items": {
                           "type": "string"
                         }
+                      },
+                      "labels": {
+                        "type": "string"
+                      },
+                      "healthcheck": {
+                        "type": "string"
                       },
                       "ports": {
                         "type": "array",
@@ -27279,7 +27300,8 @@
                       }
                     },
                     "required": [
-                      "image"
+                      "image",
+                      "mode"
                     ]
                   },
                   "sourceConfigId": {

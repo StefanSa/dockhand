@@ -531,7 +531,7 @@
 	}
 
 	function openServiceEditor(service: SwarmServiceSummary): void {
-		if (isStackManagedSwarmService(service) || (service.mode !== 'replicated' && service.mode !== 'global')) return;
+		if (service.mode !== 'replicated' && service.mode !== 'global') return;
 		serviceEditorMode = 'edit';
 		serviceEditorService = service;
 		serviceEditorOpen = true;
@@ -900,12 +900,10 @@
 							<div class="flex flex-wrap items-start justify-between gap-3">
 								<div><Card.Title>{selectedService.name}</Card.Title><Card.Description class="font-mono break-all">{selectedService.id}</Card.Description></div>
 								<div class="flex gap-2">
-									{#if selectedService.stackName}
-										<Button size="sm" variant="outline" href={detailHref('stack', selectedService.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
-									{:else if data.capability.controlAvailable && $canAccess('swarm', 'update') && (selectedService.mode === 'replicated' || selectedService.mode === 'global')}
+									{#if selectedService.stackName}<Button size="sm" variant="outline" href={detailHref('stack', selectedService.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>{/if}
+									{#if data.capability.controlAvailable && $canAccess('swarm', 'update') && (selectedService.mode === 'replicated' || selectedService.mode === 'global')}
 										<Button size="sm" onclick={() => openServiceEditor(selectedService)}><Pencil class="h-4 w-4" /> Edit service</Button>
-										<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button>
-										<Button size="sm" variant="destructive" onclick={() => openDeleteServiceDialog(selectedService)}><Trash2 class="h-4 w-4" /> Delete</Button>
+										{#if !selectedService.stackName}<Button size="sm" variant="outline" onclick={() => openForceUpdateDialog(selectedService)}><RotateCw class="h-4 w-4" /> Restart</Button><Button size="sm" variant="destructive" onclick={() => openDeleteServiceDialog(selectedService)}><Trash2 class="h-4 w-4" /> Delete</Button>{/if}
 									{/if}
 								</div>
 							</div>
@@ -915,7 +913,7 @@
 								<Alert.Root class="border-amber-600/30 bg-amber-500/10">
 									<Layers class="h-4 w-4 text-amber-700 dark:text-amber-400" />
 									<Alert.Title>Stack-managed service</Alert.Title>
-									<Alert.Description>The stored definition for <a class="font-medium underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a> is the source of truth. Direct scale, restart, and Config-reference changes are disabled; edit and redeploy the stack instead.</Alert.Description>
+									<Alert.Description>The stored definition for <a class="font-medium underline" href={detailHref('stack', selectedService.stackName)}>{selectedService.stackName}</a> remains the source of truth. Live ServiceSpec edits are allowed with an explicit drift warning; Dockhand does not change the stored stack file automatically. Direct scale, restart, delete, and Config-replacement actions remain disabled.</Alert.Description>
 								</Alert.Root>
 							{/if}
 							<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4">
@@ -1094,14 +1092,15 @@
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<Table.Cell>
 										<div class="flex justify-end gap-2">
-											{#if service.stackName}
-												<Button variant="outline" size="sm" href={detailHref('stack', service.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>
-										{:else if service.mode === 'replicated' || service.mode === 'global'}
+											{#if service.stackName}<Button variant="outline" size="sm" href={detailHref('stack', service.stackName)}><Layers class="h-4 w-4" /> Open stack</Button>{/if}
+										{#if service.mode === 'replicated' || service.mode === 'global'}
 											<Button size="sm" onclick={() => openServiceEditor(service)} disabled={actionPending}><Pencil class="h-4 w-4" /> Edit</Button>
+											{#if !service.stackName}
 											<Button variant="outline" size="sm" onclick={() => openForceUpdateDialog(service)} disabled={actionPending}>
-													<RotateCw class="h-4 w-4" /> Restart
-												</Button>
+												<RotateCw class="h-4 w-4" /> Restart
+											</Button>
 											<Button variant="destructive" size="sm" onclick={() => openDeleteServiceDialog(service)} disabled={deleteServicePending}><Trash2 class="h-4 w-4" /> Delete</Button>
+											{/if}
 											{/if}
 										</div>
 									</Table.Cell>

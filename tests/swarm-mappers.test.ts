@@ -71,6 +71,7 @@ describe('Swarm read-only response mapping', () => {
 				TaskTemplate: {
 					ContainerSpec: {
 						Image: 'nginx:1.29',
+						Healthcheck: { Test: ['CMD', 'nginx', '-t'], Interval: 30_000_000_000, Timeout: 5_000_000_000, Retries: 3, StartPeriod: 10_000_000_000 },
 						Configs: [{ ConfigID: 'config-1', ConfigName: 'app-config', File: { Name: '/etc/app.conf' } }],
 						Secrets: [{ SecretID: 'secret-1', SecretName: 'db-password', File: { Name: 'db-password' } }]
 					},
@@ -90,6 +91,7 @@ describe('Swarm read-only response mapping', () => {
 		assert.equal(service.desiredTasks, 3);
 		assert.equal(service.runningTasks, 2);
 		assert.deepEqual(service.labels, { team: 'platform', 'com.docker.stack.namespace': 'demo' });
+		assert.deepEqual(service.healthcheck, { test: ['CMD', 'nginx', '-t'], intervalSeconds: 30, timeoutSeconds: 5, retries: 3, startPeriodSeconds: 10 });
 		assert.equal(service.stackName, 'demo');
 		assert.equal(service.healthState, 'converging');
 		assert.deepEqual(service.configs, [{ id: 'config-1', name: 'app-config', target: '/etc/app.conf' }]);

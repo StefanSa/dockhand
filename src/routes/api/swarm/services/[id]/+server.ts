@@ -16,7 +16,7 @@ import {
  * summary: Edit, scale, restart, or replace a Config reference on an existing Swarm service
  * path: id:string! Swarm service ID (from GET /api/swarm)
  * query: env:integer! Manager environment ID (from GET /api/environments)
- * body: {action:string!, replicas:integer, spec:{image:string!, replicas:integer, command:array<string>, args:array<string>, environment:array<string>, ports:array<object>, mounts:array<object>, networks:array<object>, configs:array<object>, secrets:array<object>, constraints:array<string>, resources:object, restartPolicy:object, updatePolicy:object, rollbackPolicy:object, stopGracePeriodSeconds:number, endpointMode:string}, sourceConfigId:string, replacementConfigId:string, replacementConfigName:string}
+ * body: {action:string!, replicas:integer, spec:{image:string!, mode:string!, replicas:integer, command:array<string>, args:array<string>, environment:array<string>, labels:object, healthcheck:object, ports:array<object>, mounts:array<object>, networks:array<object>, configs:array<object>, secrets:array<object>, constraints:array<string>, resources:object, restartPolicy:object, updatePolicy:object, rollbackPolicy:object, stopGracePeriodSeconds:number, endpointMode:string}, sourceConfigId:string, replacementConfigId:string, replacementConfigName:string}
  * body-example: {"action":"scale","replicas":3}
  * resp-200: {success:boolean!, action:string!, version:integer!, warnings:array<string>!}
  * resp-400: Invalid action, replica count, service ID, or unsupported service mode

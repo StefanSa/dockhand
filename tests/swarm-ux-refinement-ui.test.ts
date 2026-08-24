@@ -26,23 +26,30 @@ describe('Swarm UX refinement UI gates', () => {
 		assert.match(swarmPage, /no manual scale/);
 	});
 
-	it('keeps stack-managed services read-only and directs mutations to the stack source of truth', () => {
+	it('allows explicit stack-managed edits with a visible source-of-truth drift warning', () => {
 		assert.match(swarmPage, /Stack-managed service/);
 		assert.match(swarmPage, /stored definition.*?source of truth/s);
-		assert.match(swarmPage, /!isStackManagedSwarmService\(service\)/);
+		assert.doesNotMatch(swarmPage, /function openServiceEditor\(service[^}]+isStackManagedSwarmService\(service\)/);
+		assert.match(serviceEditor, /Live edit may drift from stack/);
+		assert.match(serviceEditor, /will not change the stored stack file/);
+		assert.match(serviceEditor, /swarmDetailHref\('stack', service\.stackName\)/);
 		assert.match(swarmPage, /disabled=\{resourcePending \|\| Boolean\(usage\.stackName\)\}/);
 	});
 
-	it('offers the complete direct ServiceUpdate editor only for standalone replicated and global services', () => {
+	it('offers the complete ServiceUpdate editor for replicated and global services', () => {
 		assert.match(swarmPage, /openServiceEditor\(service/);
-		assert.match(swarmPage, /isStackManagedSwarmService\(service\)[\s\S]*?return/);
 		assert.match(serviceEditor, /action: 'update'/);
 		for (const label of [
-			'Image', 'Desired replicas', 'Command', 'Arguments', 'Environment', 'Published ports',
+			'Image', 'Desired replicas', 'Command', 'Arguments', 'Environment', 'Service labels', 'Healthcheck', 'Published ports',
 			'Overlay networks', 'Mounts', 'Configs', 'Secrets', 'Placement constraints', 'CPU limit',
 			'Restart condition', 'Update policy', 'Rollback policy'
 		]) assert.match(serviceEditor, new RegExp(label));
 		assert.match(serviceEditor, /serviceMode === 'replicated'/);
+		assert.match(serviceEditor, /bind:value=\{serviceMode\}/);
+		assert.match(serviceEditor, /Search networks/);
+		assert.match(serviceEditor, /Aliases for/);
+		assert.match(serviceEditor, /Search Configs/);
+		assert.match(serviceEditor, /Search Secrets/);
 		assert.doesNotMatch(serviceEditor, /secret\.data|secretValue|Spec\.Data/);
 	});
 
