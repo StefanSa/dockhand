@@ -1,5 +1,6 @@
 import { writable, get } from 'svelte/store';
 import type { EnvironmentStats } from '../../routes/api/dashboard/stats/+server';
+import type { SwarmEnvironmentCluster } from '$lib/environment-grouping';
 
 // Grid item layout format for svelte-grid
 export interface GridItem {
@@ -46,6 +47,7 @@ export interface TileItem {
 	stats: EnvironmentStats | null;
 	info: EnvironmentInfo | null;
 	loading: boolean;
+	cluster?: SwarmEnvironmentCluster;
 }
 
 // Dashboard data store for caching between navigations

@@ -25,9 +25,10 @@
 	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import CodeEditor from '$lib/components/CodeEditor.svelte';
 	import SwarmServiceEditorModal from './SwarmServiceEditorModal.svelte';
-	import { currentEnvironment } from '$lib/stores/environment';
+	import { currentEnvironment, environments } from '$lib/stores/environment';
 	import { canAccess } from '$lib/stores/auth';
-	import { swarmCapability } from '$lib/stores/swarm';
+	import { swarmCapability, swarmEnvironmentCapabilities } from '$lib/stores/swarm';
+	import { environmentGroupForId, groupEnvironments, swarmManagerEnvironmentId } from '$lib/environment-grouping';
 	import { copyToClipboard } from '$lib/utils/clipboard';
 	import type { SwarmConfigSummary, SwarmNodeSummary, SwarmReadModel, SwarmSecretSummary, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
 	import { filterSwarmTasks, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
@@ -103,6 +104,9 @@
 	let replacementServiceIds = $state<string[]>([]);
 	let replacementConfirmed = $state(false);
 	let copiedConfigId = $state<string | null>(null);
+	const environmentGroups = $derived(groupEnvironments($environments, $swarmEnvironmentCapabilities.capabilities));
+	const activeEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, $currentEnvironment?.id));
+	const activeCluster = $derived(activeEnvironmentGroup?.kind === 'swarm-cluster' ? activeEnvironmentGroup : null);
 	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
 	const visibleTasks = $derived(filterSwarmTasks(
 		data?.tasks ?? [],
@@ -153,6 +157,7 @@
 			data = body;
 			reconcilePendingScales(body);
 			swarmCapability.setCapability(environmentId, body.capability);
+			swarmEnvironmentCapabilities.setCapability(environmentId, body.capability);
 		} catch (loadError) {
 			if (requestId !== requestSequence) return;
 			error = loadError instanceof Error ? loadError.message : 'Failed to load Swarm data';
@@ -768,41 +773,46 @@
 		}
 	}
 
+	function syncEnvironmentContext(nextId: number | null): void {
+		if (nextId === environmentId) return;
+		const previousId = environmentId;
+		environmentId = nextId;
+		data = null;
+		error = null;
+		closeActionDialog();
+		serviceEditorOpen = false;
+		serviceEditorMode = 'edit';
+		serviceEditorService = null;
+		deleteServiceDialogOpen = false;
+		serviceToDelete = null;
+		deleteServiceError = null;
+		closeNodeActionDialog();
+		closeStackDialog();
+		closeResourceDialog();
+		closeMetadataDialog();
+		closeReplaceConfigDialog();
+		removeStackDialogOpen = false;
+		deleteResourceDialogOpen = false;
+		deleteResource = null;
+		requestSequence++;
+		if (previousId !== null && parseSwarmDetail($page.url.searchParams)) {
+			void goto(swarmTabHref(activeTab as SwarmTab), { replaceState: true, noScroll: true, keepFocus: true });
+		}
+		if (nextId) void load(true);
+	}
+
+	$effect(() => {
+		const selectedId = $currentEnvironment?.id ?? null;
+		if (selectedId && !$swarmEnvironmentCapabilities.initialized) return;
+		syncEnvironmentContext(swarmManagerEnvironmentId(environmentGroups, selectedId));
+	});
+
 	onMount(() => {
-		const unsubscribe = currentEnvironment.subscribe((environment) => {
-			const nextId = environment?.id ?? null;
-			if (nextId === environmentId) return;
-			const previousId = environmentId;
-			environmentId = nextId;
-			data = null;
-			error = null;
-			closeActionDialog();
-			serviceEditorOpen = false;
-			serviceEditorMode = 'edit';
-			serviceEditorService = null;
-			deleteServiceDialogOpen = false;
-			serviceToDelete = null;
-			deleteServiceError = null;
-			closeNodeActionDialog();
-			closeStackDialog();
-			closeResourceDialog();
-			closeMetadataDialog();
-			closeReplaceConfigDialog();
-			removeStackDialogOpen = false;
-			deleteResourceDialogOpen = false;
-			deleteResource = null;
-			requestSequence++;
-			if (previousId !== null && parseSwarmDetail($page.url.searchParams)) {
-				void goto(swarmTabHref(activeTab as SwarmTab), { replaceState: true, noScroll: true, keepFocus: true });
-			}
-			if (nextId) void load(true);
-		});
 		const interval = setInterval(() => {
 			if (environmentId && !loading && !refreshing && !actionPending && !nodeActionPending && !stackPending && !resourcePending) void load(false);
 		}, POLL_INTERVAL_MS);
 
 		return () => {
-			unsubscribe();
 			clearInterval(interval);
 			requestSequence++;
 		};
@@ -811,9 +821,12 @@
 
 <div class="h-full min-h-0 flex flex-col gap-4 p-4 md:p-6">
 	<div class="flex items-center justify-between gap-3">
-		<PageHeader icon={SwarmIcon} title="Docker Swarm" showConnection={false}>
+		<PageHeader icon={SwarmIcon} title={activeCluster?.name ?? 'Docker Swarm'} showConnection={false}>
 			{#if data?.capability}
 				<SwarmBadge capability={data.capability} />
+			{/if}
+			{#if activeCluster}
+				<span class="text-xs text-muted-foreground">{activeCluster.nodes.length} nodes · manager endpoint {activeCluster.environment.name}</span>
 			{/if}
 		</PageHeader>
 		<div class="flex items-center gap-2">

@@ -38,6 +38,7 @@
 		connectionType?: ConnectionType;
 		environmentId: number;
 		swarm?: SwarmCapability;
+		subtitle?: string;
 		width?: number;
 		height?: number;
 		compact?: boolean;
@@ -62,6 +63,7 @@
 		connectionType = 'socket',
 		environmentId,
 		swarm,
+		subtitle,
 		width = 1,
 		height = 1,
 		compact = false
@@ -73,6 +75,7 @@
 		connectionType === 'hawser-edge' ? 'Edge connection' :
 		(port ? `${host}:${port}` : host || 'Unknown host')
 	);
+	const secondaryDisplay = $derived(subtitle || hostDisplay);
 
 	const canEdit = $derived($canAccess('environments', 'edit'));
 
@@ -104,7 +107,7 @@
 					<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 				{/if}
 			</div>
-			<span class="text-xs text-muted-foreground truncate block">{hostDisplay}</span>
+			<span class="text-xs text-muted-foreground truncate block" title={secondaryDisplay}>{secondaryDisplay}</span>
 		</div>
 	</div>
 {:else}
@@ -143,7 +146,7 @@
 						<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 					{/if}
 				</div>
-				<span class="text-xs text-muted-foreground truncate block">{hostDisplay}</span>
+				<span class="text-xs text-muted-foreground truncate block" title={secondaryDisplay}>{secondaryDisplay}</span>
 			</div>
 		</div>
 

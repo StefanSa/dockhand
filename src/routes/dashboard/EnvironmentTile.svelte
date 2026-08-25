@@ -6,6 +6,7 @@
 	import { goto } from '$app/navigation';
 	import { canAccess } from '$lib/stores/auth';
 	import type { EnvironmentStats } from '../api/dashboard/stats/+server';
+	import type { SwarmEnvironmentCluster } from '$lib/environment-grouping';
 	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import {
 		DashboardHeader,
@@ -28,9 +29,10 @@
 		height?: number;
 		oneventsclick?: () => void;
 		showStacksBreakdown?: boolean;
+		cluster?: SwarmEnvironmentCluster;
 	}
 
-	let { stats, width = 1, height = 1, oneventsclick, showStacksBreakdown = true }: Props = $props();
+	let { stats, width = 1, height = 1, oneventsclick, showStacksBreakdown = true, cluster }: Props = $props();
 
 	// Specific tile size conditionals for easy customization
 	const is1x1 = $derived(width === 1 && height === 1);
@@ -50,6 +52,14 @@
 	const isStillLoading = $derived(stats.loading && Object.values(stats.loading).some(v => v === true));
 	const showOffline = $derived(stats.online === false);
 	const showConnecting = $derived(stats.online === undefined);
+	const endpointDisplay = $derived(
+		stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
+		stats.connectionType === 'hawser-edge' ? 'Edge connection' :
+		(stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')
+	);
+	const environmentSubtitle = $derived(cluster
+		? `${cluster.nodes.length} nodes · ${cluster.nodes.map((node) => `${node.name} (${node.role})`).join(' · ')}`
+		: endpointDisplay);
 </script>
 
 <Card.Root
@@ -94,11 +104,7 @@
 								<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 							{/if}
 						</div>
-						<span class="text-xs text-muted-foreground truncate block" title={stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') : stats.connectionType === 'hawser-edge' ? 'Edge connection' : (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}>
-							{stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
-							 stats.connectionType === 'hawser-edge' ? 'Edge connection' :
-							 (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}
-						</span>
+						<span class="text-xs text-muted-foreground truncate block" title={environmentSubtitle}>{environmentSubtitle}</span>
 					</div>
 				</div>
 				<!-- Right: Status icons + Settings -->
@@ -191,11 +197,7 @@
 								<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 							{/if}
 						</div>
-						<span class="text-xs text-muted-foreground truncate block" title={stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') : stats.connectionType === 'hawser-edge' ? 'Edge connection' : (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}>
-							{stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
-							 stats.connectionType === 'hawser-edge' ? 'Edge connection' :
-							 (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}
-						</span>
+						<span class="text-xs text-muted-foreground truncate block" title={environmentSubtitle}>{environmentSubtitle}</span>
 					</div>
 				</div>
 				<!-- Right: Status icons + Settings -->
@@ -295,11 +297,7 @@
 							<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 						{/if}
 					</div>
-					<span class="text-xs text-muted-foreground truncate block" title={stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') : stats.connectionType === 'hawser-edge' ? 'Edge connection' : (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}>
-						{stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
-						 stats.connectionType === 'hawser-edge' ? 'Edge connection' :
-						 (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}
-					</span>
+					<span class="text-xs text-muted-foreground truncate block" title={environmentSubtitle}>{environmentSubtitle}</span>
 				</div>
 			</div>
 			<!-- Right: Status icons + Settings -->
@@ -397,11 +395,7 @@
 							<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 						{/if}
 					</div>
-					<span class="text-xs text-muted-foreground truncate block" title={stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') : stats.connectionType === 'hawser-edge' ? 'Edge connection' : (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}>
-						{stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
-						 stats.connectionType === 'hawser-edge' ? 'Edge connection' :
-						 (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}
-					</span>
+					<span class="text-xs text-muted-foreground truncate block" title={environmentSubtitle}>{environmentSubtitle}</span>
 				</div>
 			</div>
 			<!-- Right: Status icons + Settings -->
@@ -502,11 +496,7 @@
 							<Wifi class="w-3 h-3 text-green-500 shrink-0" />
 						{/if}
 					</div>
-					<span class="text-xs text-muted-foreground truncate block" title={stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') : stats.connectionType === 'hawser-edge' ? 'Edge connection' : (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}>
-						{stats.connectionType === 'socket' ? (stats.socketPath || '/var/run/docker.sock') :
-						 stats.connectionType === 'hawser-edge' ? 'Edge connection' :
-						 (stats.port ? `${stats.host}:${stats.port}` : stats.host || 'Unknown host')}
-					</span>
+					<span class="text-xs text-muted-foreground truncate block" title={environmentSubtitle}>{environmentSubtitle}</span>
 				</div>
 			</div>
 			<!-- Right: Status icons + Settings -->
@@ -588,6 +578,7 @@
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
 				swarm={stats.swarm}
+				subtitle={environmentSubtitle}
 				{width}
 				{height}
 			/>
@@ -635,6 +626,7 @@
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
 				swarm={stats.swarm}
+				subtitle={environmentSubtitle}
 				{width}
 				{height}
 			/>
@@ -688,6 +680,7 @@
 				connectionType={stats.connectionType}
 				environmentId={stats.id}
 				swarm={stats.swarm}
+				subtitle={environmentSubtitle}
 				{width}
 				{height}
 			/>

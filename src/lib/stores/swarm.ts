@@ -1,7 +1,9 @@
 import { browser } from '$app/environment';
-import { currentEnvironment } from './environment';
+import { writable } from 'svelte/store';
+import { currentEnvironment, environments } from './environment';
 import { createSwarmCapabilityStore, type SwarmCapabilityCache } from './swarm-capability';
 import type { SwarmCapability, SwarmCapabilityKind } from '$lib/types/swarm';
+import { enrichCapabilitiesWithManagerTopology, type SwarmManagerTopology } from '$lib/environment-grouping';
 
 const CAPABILITY_CACHE_PREFIX = 'dockhand:swarm-capability:v1:';
 const CAPABILITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -47,19 +49,116 @@ const browserCapabilityCache: SwarmCapabilityCache | undefined = browser ? {
 	}
 } : undefined;
 
-export const swarmCapability = createSwarmCapabilityStore(async (environmentId, refresh) => {
+async function fetchSwarmCapability(environmentId: number, refresh: boolean): Promise<SwarmCapability> {
 	const suffix = refresh ? '?refresh=true' : '';
 	const response = await fetch(`/api/environments/${environmentId}/capabilities${suffix}`);
 	const body = await response.json();
 	if (!response.ok) throw new Error(body.error || 'Failed to detect Swarm capability');
 	return body;
-}, browserCapabilityCache);
+}
+
+export const swarmCapability = createSwarmCapabilityStore(fetchSwarmCapability, browserCapabilityCache);
+
+export interface SwarmEnvironmentCapabilitiesState {
+	environmentIds: number[];
+	capabilities: Record<number, SwarmCapability>;
+	loading: boolean;
+	initialized: boolean;
+}
+
+function createSwarmEnvironmentCapabilitiesStore() {
+	const initial: SwarmEnvironmentCapabilitiesState = {
+		environmentIds: [],
+		capabilities: {},
+		loading: false,
+		initialized: false
+	};
+	const { subscribe, set } = writable(initial);
+	let state = initial;
+	let requestSequence = 0;
+
+	function publish(next: SwarmEnvironmentCapabilitiesState): void {
+		state = next;
+		set(next);
+	}
+
+	async function load(environmentIds: number[], refresh = false): Promise<void> {
+		const ids = [...new Set(environmentIds)].sort((left, right) => left - right);
+		const requestId = ++requestSequence;
+		if (ids.length === 0) {
+			publish({ environmentIds: [], capabilities: {}, loading: false, initialized: true });
+			return;
+		}
+
+		const sameSet = ids.length === state.environmentIds.length
+			&& ids.every((id, index) => id === state.environmentIds[index]);
+		if (sameSet && state.initialized && !refresh) return;
+
+		const retained = Object.fromEntries(
+			ids.flatMap((id) => state.capabilities[id] ? [[id, state.capabilities[id]]] : [])
+		) as Record<number, SwarmCapability>;
+		publish({ environmentIds: ids, capabilities: retained, loading: true, initialized: sameSet && state.initialized });
+
+		const results = await Promise.all(ids.map(async (environmentId) => {
+			try {
+				return [environmentId, await fetchSwarmCapability(environmentId, refresh)] as const;
+			} catch {
+				return [environmentId, retained[environmentId]] as const;
+			}
+		}));
+		if (requestId !== requestSequence) return;
+
+		const detectedCapabilities: Record<number, SwarmCapability> = {};
+		for (const [environmentId, capability] of results) {
+			if (capability) detectedCapabilities[environmentId] = capability;
+		}
+		const topologies = (await Promise.all(Object.entries(detectedCapabilities).map(async ([environmentId, capability]): Promise<SwarmManagerTopology | null> => {
+			if (capability.kind !== 'swarm-manager' || !capability.clusterId) return null;
+			try {
+				const response = await fetch(`/api/swarm?env=${environmentId}`);
+				if (!response.ok) return null;
+				const model = await response.json();
+				if (!Array.isArray(model.nodes)) return null;
+				return {
+					clusterId: capability.clusterId,
+					nodes: model.nodes.flatMap((node: any) => typeof node?.id === 'string' ? [{
+						id: node.id,
+						hostname: typeof node.hostname === 'string' ? node.hostname : undefined,
+						role: node.role === 'manager' || node.role === 'worker' ? node.role : undefined
+					}] : [])
+				};
+			} catch {
+				return null;
+			}
+		}))).filter((topology): topology is SwarmManagerTopology => Boolean(topology));
+		if (requestId !== requestSequence) return;
+		const capabilities = enrichCapabilitiesWithManagerTopology(detectedCapabilities, topologies);
+		publish({ environmentIds: ids, capabilities, loading: false, initialized: true });
+	}
+
+	return {
+		subscribe,
+		load,
+		setCapability(environmentId: number, capability: SwarmCapability) {
+			if (!state.environmentIds.includes(environmentId)) return;
+			publish({
+				...state,
+				capabilities: { ...state.capabilities, [environmentId]: capability }
+			});
+		}
+	};
+}
+
+export const swarmEnvironmentCapabilities = createSwarmEnvironmentCapabilitiesStore();
 
 if (browser) {
 	let activeEnvironmentId: number | null = null;
 	currentEnvironment.subscribe((environment) => {
 		activeEnvironmentId = environment?.id ?? null;
 		void swarmCapability.load(activeEnvironmentId);
+	});
+	environments.subscribe((environmentList) => {
+		void swarmEnvironmentCapabilities.load(environmentList.map((environment) => environment.id));
 	});
 	setInterval(() => {
 		if (activeEnvironmentId) void swarmCapability.load(activeEnvironmentId, true);

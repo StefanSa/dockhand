@@ -12,6 +12,7 @@ export interface SwarmCapability {
 	localNodeState?: SwarmLocalNodeState;
 	controlAvailable?: boolean;
 	nodeId?: string;
+	nodeName?: string;
 	nodeAddress?: string;
 	clusterId?: string;
 	nodeCount?: number;
@@ -324,6 +325,7 @@ export function parseSwarmCapability(
 			: undefined,
 		controlAvailable: swarm && typeof swarm.ControlAvailable === 'boolean' ? swarm.ControlAvailable : undefined,
 		nodeId: swarm ? stringValue(swarm.NodeID) : undefined,
+		nodeName: stringValue(infoValue.Name),
 		nodeAddress: swarm ? stringValue(swarm.NodeAddr) : undefined,
 		clusterId: swarm && isRecord(swarm.Cluster) ? stringValue(swarm.Cluster.ID) : undefined,
 		nodeCount: swarm ? numberValue(swarm.Nodes) : undefined,

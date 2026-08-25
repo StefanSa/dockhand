@@ -12,6 +12,7 @@ const version = { ApiVersion: '1.55', Version: '28.3.3' };
 describe('parseSwarmCapability', () => {
 	it('classifies an active control node as a Swarm manager', () => {
 		const capability = parseSwarmCapability({
+			Name: 'swarm-mgr01',
 			ServerVersion: '28.3.3',
 			Swarm: {
 				LocalNodeState: 'active',
@@ -28,6 +29,7 @@ describe('parseSwarmCapability', () => {
 		assert.equal(capability.kind, 'swarm-manager');
 		assert.equal(capability.controlAvailable, true);
 		assert.equal(capability.clusterId, 'cluster-one');
+		assert.equal(capability.nodeName, 'swarm-mgr01');
 		assert.equal(capability.nodeCount, 3);
 		assert.deepEqual(capability.managerAddresses, ['10.0.0.10:2377']);
 		assert.equal(capability.apiVersion, '1.55');

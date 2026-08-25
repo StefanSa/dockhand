@@ -24,6 +24,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import MultiSelectFilter from '$lib/components/MultiSelectFilter.svelte';
 	import { appSettings } from '$lib/stores/settings';
+	import { swarmEnvironmentCapabilities } from '$lib/stores/swarm';
+	import { groupEnvironments } from '$lib/environment-grouping';
 
 	const LABEL_FILTER_STORAGE_KEY = 'dockhand-dashboard-label-filter';
 
@@ -63,6 +65,27 @@
 
 	// Where a tile click navigates (nav preference; default containers). Loaded in onMount.
 	let envClickPage = $state('containers');
+	const environmentGroups = $derived(groupEnvironments($environments, $swarmEnvironmentCapabilities.capabilities));
+	const displayTiles: TileItem[] = $derived.by(() => {
+		if (!$swarmEnvironmentCapabilities.initialized) return [];
+		const byId = new Map(tiles.map((tile) => [tile.id, tile]));
+		const groupedTiles: TileItem[] = [];
+		for (const group of environmentGroups) {
+			const tile = byId.get(group.environment.id);
+			if (!tile) continue;
+			if (group.kind === 'environment') {
+				groupedTiles.push({ ...tile, cluster: undefined });
+				continue;
+			}
+			const managerCapability = group.nodes.find((node) => node.role === 'manager')?.capability;
+			groupedTiles.push({
+				...tile,
+				cluster: group,
+				stats: tile.stats ? { ...tile.stats, name: group.name, swarm: managerCapability ?? tile.stats.swarm } : null
+			});
+		}
+		return groupedTiles;
+	});
 
 	// List view filter state
 	let listSearchQuery = $state('');
@@ -191,7 +214,7 @@
 	// Compute all unique labels from all tiles
 	const allLabels = $derived.by(() => {
 		const labelSet = new Set<string>();
-		for (const tile of tiles) {
+		for (const tile of displayTiles) {
 			const labels = tile.stats?.labels || [];
 			for (const label of labels) {
 				labelSet.add(label);
@@ -213,24 +236,26 @@
 	// Filter tiles for list view based on selected labels
 	const filteredTiles = $derived.by(() => {
 		if (filterLabels.length === 0) {
-			return tiles;
+			return displayTiles;
 		}
 		const matchFn = $appSettings.labelFilterMode === 'all'
 			? (tileLabels: string[]) => filterLabels.every(label => tileLabels.includes(label))
 			: (tileLabels: string[]) => filterLabels.some(label => tileLabels.includes(label));
-		return tiles.filter(t => matchFn(t.stats?.labels || []));
+		return displayTiles.filter(t => matchFn(t.stats?.labels || []));
 	});
 
 	// Filter grid items based on selected labels
 	const filteredGridItems = $derived.by(() => {
+		const visibleIds = new Set(displayTiles.map((tile) => tile.id));
+		const visibleItems = gridItems.filter((item) => visibleIds.has(item.id));
 		if (filterLabels.length === 0) {
-			return gridItems;
+			return visibleItems;
 		}
 		const matchFn = $appSettings.labelFilterMode === 'all'
 			? (tileLabels: string[]) => filterLabels.every(label => tileLabels.includes(label))
 			: (tileLabels: string[]) => filterLabels.some(label => tileLabels.includes(label));
-		return gridItems.filter(item => {
-			const tile = tiles.find(t => t.id === item.id);
+		return visibleItems.filter(item => {
+			const tile = displayTiles.find(t => t.id === item.id);
 			return matchFn(tile?.stats?.labels || []);
 		});
 	});
@@ -662,15 +687,16 @@
 
 	// Get tile by id
 	function getTileById(id: number): TileItem | undefined {
-		return tiles.find(t => t.id === id);
+		return displayTiles.find(t => t.id === id);
 	}
 
 	// Handle tile click - select environment and navigate to the env-click target page
 	function handleTileClick(envId: number) {
 		const tile = getTileById(envId);
 		if (tile?.stats) {
-			currentEnvironment.set({ id: envId, name: tile.stats.name });
-			goto(`/${envClickPage}`);
+			const targetId = tile.cluster?.managerEnvironmentId ?? envId;
+			currentEnvironment.set({ id: targetId, name: tile.stats.name });
+			goto(tile.cluster ? '/swarm?tab=overview' : `/${envClickPage}`);
 		}
 	}
 
@@ -678,8 +704,9 @@
 	function handleEventsClick(envId: number) {
 		const tile = getTileById(envId);
 		if (tile?.stats) {
-			currentEnvironment.set({ id: envId, name: tile.stats.name });
-			goto(`/activity?env=${envId}`);
+			const targetId = tile.cluster?.managerEnvironmentId ?? envId;
+			currentEnvironment.set({ id: targetId, name: tile.stats.name });
+			goto(`/activity?env=${targetId}`);
 		}
 	}
 
@@ -1027,7 +1054,7 @@
 	<!-- Header -->
 	<div class="shrink-0 flex flex-wrap justify-between items-center gap-3 min-h-8">
 		<div class="flex items-center gap-4">
-			<PageHeader icon={LayoutGrid} title="Environments" count={tiles.length} />
+			<PageHeader icon={LayoutGrid} title="Environments" count={displayTiles.length} />
 
 			<!-- Label filter toggles (only show if there are labels) -->
 			{#if allLabels.length > 0}
@@ -1161,7 +1188,7 @@
 	</div>
 
 	<!-- Initial loading state before any tiles - show until we know whether environments exist -->
-	{#if !environmentsLoaded && tiles.length === 0}
+	{#if (!environmentsLoaded && tiles.length === 0) || !$swarmEnvironmentCapabilities.initialized}
 		<div class="flex items-center justify-center gap-2 text-muted-foreground py-8">
 			<Loader2 class="w-5 h-5 animate-spin text-primary" />
 			<span class="text-sm">Loading environments...</span>
@@ -1219,6 +1246,7 @@
 							<div class="w-full cursor-pointer" onclick={() => handleTileClick(tile.stats!.id)}>
 								<EnvironmentTile
 									stats={tile.stats}
+									cluster={tile.cluster}
 									width={2}
 									height={Math.max(item.h, 2)}
 									oneventsclick={() => handleEventsClick(tile.stats!.id)}
@@ -1257,7 +1285,7 @@
 							/>
 						{:else if tile.stats}
 							<!-- Show actual tile with data -->
-							<EnvironmentTile stats={tile.stats} width={item.w} height={item.h} oneventsclick={() => handleEventsClick(tile.stats!.id)} />
+							<EnvironmentTile stats={tile.stats} cluster={tile.cluster} width={item.w} height={item.h} oneventsclick={() => handleEventsClick(tile.stats!.id)} />
 						{/if}
 					{/if}
 				{/snippet}

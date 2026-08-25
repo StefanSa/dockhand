@@ -18,6 +18,7 @@
 	}
 
 	let { tiles, searchQuery = '', connectionFilter = [], onrowclick }: Props = $props();
+	const hasClusters = $derived(tiles.some((tile) => Boolean(tile.cluster)));
 
 	// Sort state
 	let sortState = $state<DataGridSortState>({ field: 'name', direction: 'asc' });
@@ -76,6 +77,7 @@
 				const s = t.stats;
 				if (!s) return false;
 				if (s.name.toLowerCase().includes(q)) return true;
+				if (t.cluster?.nodes.some((node) => node.name.toLowerCase().includes(q) || node.role.includes(q))) return true;
 				if (s.host?.toLowerCase().includes(q)) return true;
 				if (connectionLabel(s.connectionType).toLowerCase().includes(q)) return true;
 				if (s.labels?.some(l => l.toLowerCase().includes(q))) return true;
@@ -110,7 +112,7 @@
 		{sortState}
 		onSortChange={(state) => { sortState = state; }}
 		onRowClick={(tile, e) => onrowclick?.(tile.id)}
-		rowHeight={36}
+		rowHeight={hasClusters ? 48 : 36}
 	>
 		{#snippet cell(column, tile, rowState)}
 			{@const s = tile.stats}
@@ -132,7 +134,14 @@
 				{#if s}
 					<div class="flex items-center gap-2 min-w-0">
 						<EnvironmentIcon icon={s.icon || 'globe'} envId={s.id} class="w-4 h-4 text-muted-foreground shrink-0" />
-						<span class="font-medium truncate">{s.name}</span>
+						<span class="min-w-0 flex-1">
+							<span class="font-medium truncate block">{s.name}</span>
+							{#if tile.cluster}
+								<span class="text-2xs text-muted-foreground truncate block">
+									{tile.cluster.nodes.map((node) => `${node.name} (${node.role})`).join(' · ')}
+								</span>
+							{/if}
+						</span>
 						<SwarmBadge capability={s.swarm} />
 					</div>
 				{:else if tile.info}

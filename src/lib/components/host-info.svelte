@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Cpu, MemoryStick, Box, Globe, ChevronDown, Check, HardDrive, Clock, Wifi, WifiOff, Route, UndoDot, Icon, AlertCircle, Loader2, Search, Server, X } from 'lucide-svelte';
+	import { Cpu, MemoryStick, Box, Globe, ChevronDown, Check, HardDrive, Clock, Wifi, WifiOff, Route, UndoDot, Icon, AlertCircle, Loader2, Search, Server, X, Network } from 'lucide-svelte';
+	import { goto } from '$app/navigation';
 	import { whale } from '@lucide/lab';
 	import { Button } from '$lib/components/ui/button';
 	import { currentEnvironment, environments, type Environment } from '$lib/stores/environment';
@@ -10,6 +11,10 @@
 	import { themeStore, type FontSize } from '$lib/stores/theme';
 	import { formatBytes } from '$lib/utils/format';
 	import { getTimeFormat, getDefaultTimezone } from '$lib/stores/settings';
+	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
+	import { swarmEnvironmentCapabilities } from '$lib/stores/swarm';
+	import { environmentGroupForId, environmentGroupMatches, groupEnvironments, type SwarmEnvironmentCluster } from '$lib/environment-grouping';
+	import { swarmDetailHref } from '$lib/swarm-navigation';
 
 	// Font size scaling for header
 	let fontSize = $state<FontSize>('normal');
@@ -114,11 +119,9 @@
 	// Reactive environment list from store
 	let envList = $derived($environments);
 	const showSearch = $derived(envList.length > 8);
-	const filteredEnvList = $derived(
-		searchTerm.trim()
-			? envList.filter((e: Environment) => e.name.toLowerCase().includes(searchTerm.toLowerCase()))
-			: envList
-	);
+	const environmentGroups = $derived(groupEnvironments(envList, $swarmEnvironmentCapabilities.capabilities));
+	const filteredEnvironmentGroups = $derived(environmentGroups.filter((group) => environmentGroupMatches(group, searchTerm)));
+	const selectedEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, currentEnvId));
 
 	// Clear search and focus when dropdown opens/closes
 	$effect(() => {
@@ -235,16 +238,17 @@
 			(diskUsage.Volumes?.reduce((sum: number, v: any) => sum + (v.UsageData?.Size || 0), 0) || 0);
 	});
 
-	async function switchEnvironment(envId: number) {
+	async function switchEnvironment(envId: number, navigateTo?: string): Promise<boolean> {
 		// Don't switch if already on this environment
 		if (Number(envId) === Number(currentEnvId)) {
 			showDropdown = false;
-			return;
+			if (navigateTo) await goto(navigateTo);
+			return true;
 		}
 
 		// Don't switch if already switching
 		if (switchingEnvId !== null) {
-			return;
+			return false;
 		}
 
 		// IMMEDIATELY abort all pending requests for current environment
@@ -271,7 +275,7 @@
 				offlineEnvIds.add(envId);
 				offlineEnvIds = new Set(offlineEnvIds);
 				toast.error(`Cannot switch to "${envName}" - environment is offline`);
-				return;
+				return false;
 			}
 
 			const newHostInfo = await response.json();
@@ -280,7 +284,7 @@
 				offlineEnvIds.add(envId);
 				offlineEnvIds = new Set(offlineEnvIds);
 				toast.error(`Cannot switch to "${envName}" - ${newHostInfo.error}`);
-				return;
+				return false;
 			}
 
 			// Environment is online, proceed with switch
@@ -301,17 +305,29 @@
 					highlightChanges: newHostInfo.environment.highlightChanges ?? true
 				});
 			}
+			if (navigateTo) await goto(navigateTo);
+			return true;
 		} catch (error) {
 			// Ignore abort errors
 			if (error instanceof Error && error.name === 'AbortError') {
-				return;
+				return false;
 			}
 			offlineEnvIds.add(envId);
 			offlineEnvIds = new Set(offlineEnvIds);
 			toast.error(`Cannot switch to "${envName}" - connection failed`);
+			return false;
 		} finally {
 			switchingEnvId = null;
 		}
+	}
+
+	async function openSwarmCluster(cluster: SwarmEnvironmentCluster): Promise<void> {
+		await switchEnvironment(cluster.managerEnvironmentId, '/swarm?tab=overview');
+	}
+
+	async function openSwarmNode(cluster: SwarmEnvironmentCluster, nodeId: string | undefined): Promise<void> {
+		if (!nodeId) return;
+		await switchEnvironment(cluster.managerEnvironmentId, swarmDetailHref('node', nodeId));
 	}
 
 	function formatMemory(bytes: number): string {
@@ -380,7 +396,14 @@
 			onclick={() => (showDropdown = !showDropdown)}
 			class="flex items-center gap-1.5 -ml-1 px-1 py-1 rounded-md hover:bg-muted transition-colors cursor-pointer"
 		>
-			{#if hostInfo?.environment && Number(hostInfo.environment.id) === Number(currentEnvId)}
+			{#if !$swarmEnvironmentCapabilities.initialized && envList.length > 0}
+				<Loader2 class="{iconSizeLargeClass()} text-muted-foreground animate-spin" />
+				<span class="font-medium text-muted-foreground">Detecting environment…</span>
+			{:else if selectedEnvironmentGroup?.kind === 'swarm-cluster'}
+				<Network class="{iconSizeLargeClass()} text-primary" />
+				<span class="font-medium text-foreground">{selectedEnvironmentGroup.name}</span>
+				<span class="hidden sm:inline text-2xs text-muted-foreground">{selectedEnvironmentGroup.nodes.length} nodes</span>
+			{:else if hostInfo?.environment && Number(hostInfo.environment.id) === Number(currentEnvId)}
 				<EnvironmentIcon icon={hostInfo.environment.icon || 'globe'} envId={hostInfo.environment.id} class="{iconSizeLargeClass()} text-primary" />
 				<span class="font-medium text-foreground">{hostInfo.environment.name}</span>
 			{:else if currentEnvId && envList.length > 0}
@@ -434,34 +457,95 @@
 					</div>
 				{/if}
 				<div class="py-1 max-h-[calc(100vh-8rem)] overflow-y-auto">
-					{#each filteredEnvList as env (env.id)}
-						{@const isOffline = offlineEnvIds.has(env.id)}
-						{@const isSwitching = switchingEnvId === env.id}
-						<button
-							onclick={() => switchEnvironment(env.id)}
-							disabled={isSwitching}
-							class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors text-left cursor-pointer disabled:cursor-wait disabled:opacity-70"
-							class:opacity-60={isOffline && !isSwitching}
-						>
-							{#if isSwitching}
-								<Loader2 class="{iconSizeLargeClass()} text-muted-foreground shrink-0 animate-spin" />
-							{:else if isOffline}
-								<WifiOff class="{iconSizeLargeClass()} text-destructive shrink-0" />
-							{:else}
-								<EnvironmentIcon icon={env.icon || 'globe'} envId={env.id} class="{iconSizeLargeClass()} text-muted-foreground shrink-0" />
-							{/if}
-							<span class="flex-1 whitespace-nowrap" class:text-muted-foreground={isOffline}>{env.name}</span>
-							{#if isOffline && !isSwitching}
-								<span class="text-xs text-destructive">offline</span>
-							{:else if Number(env.id) === Number(currentEnvId)}
-								<Check class="{iconSizeLargeClass()} text-primary shrink-0" />
-							{/if}
-						</button>
+					{#if !$swarmEnvironmentCapabilities.initialized}
+						<div class="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground">
+							<Loader2 class="{iconSizeLargeClass()} animate-spin" />
+							Detecting Docker topology…
+						</div>
+					{:else}
+					{#each filteredEnvironmentGroups as group (group.key)}
+						{#if group.kind === 'swarm-cluster'}
+							{@const managerNode = group.nodes.find((node) => node.role === 'manager')}
+							{@const managerOffline = offlineEnvIds.has(group.managerEnvironmentId)}
+							{@const managerSwitching = switchingEnvId === group.managerEnvironmentId}
+							<div class="border-b last:border-b-0 py-1">
+								<button
+									onclick={() => openSwarmCluster(group)}
+									disabled={managerSwitching}
+									class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors text-left cursor-pointer disabled:cursor-wait disabled:opacity-70"
+									class:opacity-60={managerOffline && !managerSwitching}
+								>
+									{#if managerSwitching}
+										<Loader2 class="{iconSizeLargeClass()} text-muted-foreground shrink-0 animate-spin" />
+									{:else}
+										<Network class="{iconSizeLargeClass()} text-primary shrink-0" />
+									{/if}
+									<span class="flex-1 min-w-0">
+										<span class="block font-medium truncate">{group.name}</span>
+										<span class="block text-2xs text-muted-foreground">Swarm cluster · {group.nodes.length} nodes</span>
+									</span>
+									<SwarmBadge capability={managerNode?.capability} compact />
+								</button>
+								<div class="ml-5 border-l pl-2">
+									{#each group.nodes as node (node.environment.id)}
+										<div class="flex items-center pr-2 hover:bg-muted/70 rounded-sm">
+											<button
+												onclick={() => openSwarmNode(group, node.capability.nodeId)}
+												class="min-w-0 flex-1 flex items-center gap-2 px-2 py-1.5 text-left"
+											>
+												<Server class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+												<span class="truncate text-sm">{node.name}</span>
+												<SwarmBadge capability={node.capability} compact />
+											</button>
+											<button
+												onclick={() => switchEnvironment(node.environment.id)}
+												class="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+												title={`Use ${node.name} endpoint for node-local Docker views`}
+											>
+												{#if switchingEnvId === node.environment.id}
+													<Loader2 class="h-3.5 w-3.5 animate-spin" />
+												{:else if Number(node.environment.id) === Number(currentEnvId)}
+													<Check class="h-3.5 w-3.5 text-primary" />
+												{:else}
+													<Route class="h-3.5 w-3.5" />
+												{/if}
+											</button>
+										</div>
+									{/each}
+								</div>
+							</div>
+						{:else}
+							{@const env = group.environment}
+							{@const isOffline = offlineEnvIds.has(env.id)}
+							{@const isSwitching = switchingEnvId === env.id}
+							<button
+								onclick={() => switchEnvironment(env.id)}
+								disabled={isSwitching}
+								class="w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted transition-colors text-left cursor-pointer disabled:cursor-wait disabled:opacity-70"
+								class:opacity-60={isOffline && !isSwitching}
+							>
+								{#if isSwitching}
+									<Loader2 class="{iconSizeLargeClass()} text-muted-foreground shrink-0 animate-spin" />
+								{:else if isOffline}
+									<WifiOff class="{iconSizeLargeClass()} text-destructive shrink-0" />
+								{:else}
+									<EnvironmentIcon icon={env.icon || 'globe'} envId={env.id} class="{iconSizeLargeClass()} text-muted-foreground shrink-0" />
+								{/if}
+								<span class="flex-1 whitespace-nowrap" class:text-muted-foreground={isOffline}>{env.name}</span>
+								<SwarmBadge capability={group.capability} compact />
+								{#if isOffline && !isSwitching}
+									<span class="text-xs text-destructive">offline</span>
+								{:else if Number(env.id) === Number(currentEnvId)}
+									<Check class="{iconSizeLargeClass()} text-primary shrink-0" />
+								{/if}
+							</button>
+						{/if}
 					{:else}
 						<div class="px-3 py-2 text-sm text-muted-foreground">
 							No matching environments
 						</div>
 					{/each}
+					{/if}
 				</div>
 			</div>
 		{/if}
