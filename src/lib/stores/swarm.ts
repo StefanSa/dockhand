@@ -1,9 +1,14 @@
 import { browser } from '$app/environment';
-import { writable } from 'svelte/store';
-import { currentEnvironment, environments } from './environment';
+import { get, writable } from 'svelte/store';
+import { currentEnvironment, environments, type Environment } from './environment';
 import { createSwarmCapabilityStore, type SwarmCapabilityCache } from './swarm-capability';
 import type { SwarmCapability, SwarmCapabilityKind } from '$lib/types/swarm';
-import { enrichCapabilitiesWithManagerTopology, type SwarmManagerTopology } from '$lib/environment-grouping';
+import {
+	enrichCapabilitiesWithManagerTopology,
+	groupEnvironments,
+	swarmManagerEnvironmentId,
+	type SwarmManagerTopology
+} from '$lib/environment-grouping';
 
 const CAPABILITY_CACHE_PREFIX = 'dockhand:swarm-capability:v1:';
 const CAPABILITY_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -82,8 +87,8 @@ function createSwarmEnvironmentCapabilitiesStore() {
 		set(next);
 	}
 
-	async function load(environmentIds: number[], refresh = false): Promise<void> {
-		const ids = [...new Set(environmentIds)].sort((left, right) => left - right);
+	async function load(environmentList: Environment[], refresh = false): Promise<void> {
+		const ids = [...new Set(environmentList.map((environment) => environment.id))].sort((left, right) => left - right);
 		const requestId = ++requestSequence;
 		if (ids.length === 0) {
 			publish({ environmentIds: [], capabilities: {}, loading: false, initialized: true });
@@ -134,6 +139,18 @@ function createSwarmEnvironmentCapabilitiesStore() {
 		if (requestId !== requestSequence) return;
 		const capabilities = enrichCapabilitiesWithManagerTopology(detectedCapabilities, topologies);
 		publish({ environmentIds: ids, capabilities, loading: false, initialized: true });
+
+		const selected = get(currentEnvironment);
+		const logicalEnvironmentId = swarmManagerEnvironmentId(
+			groupEnvironments(environmentList, capabilities),
+			selected?.id
+		);
+		if (selected && logicalEnvironmentId && logicalEnvironmentId !== selected.id) {
+			const logicalEnvironment = environmentList.find((environment) => environment.id === logicalEnvironmentId);
+			if (logicalEnvironment) {
+				currentEnvironment.set({ id: logicalEnvironment.id, name: logicalEnvironment.name });
+			}
+		}
 	}
 
 	return {
@@ -158,7 +175,7 @@ if (browser) {
 		void swarmCapability.load(activeEnvironmentId);
 	});
 	environments.subscribe((environmentList) => {
-		void swarmEnvironmentCapabilities.load(environmentList.map((environment) => environment.id));
+		void swarmEnvironmentCapabilities.load(environmentList);
 	});
 	setInterval(() => {
 		if (activeEnvironmentId) void swarmCapability.load(activeEnvironmentId, true);

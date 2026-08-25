@@ -40,9 +40,10 @@
 	import { selfUpdate } from '$lib/stores/self-update';
 	import { appSettings } from '$lib/stores/settings';
 	import { sidebarPreferencesStore, orderItems } from '$lib/stores/sidebar-preferences';
-	import { swarmCapability } from '$lib/stores/swarm';
+	import { swarmCapability, swarmEnvironmentCapabilities } from '$lib/stores/swarm';
 	import { capabilityForEnvironment } from '$lib/stores/swarm-capability';
-	import { currentEnvironment } from '$lib/stores/environment';
+	import { currentEnvironment, environments } from '$lib/stores/environment';
+	import { environmentGroupForId, groupEnvironments } from '$lib/environment-grouping';
 	import { isSwarmEnvironment } from '$lib/types/swarm';
 	import * as Avatar from '$lib/components/ui/avatar';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -74,8 +75,12 @@
 	}
 
 	const currentPath = $derived($page.url.pathname);
+	const environmentGroups = $derived(groupEnvironments($environments, $swarmEnvironmentCapabilities.capabilities));
+	const activeEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, $currentEnvironment?.id));
 	const activeSwarmCapability = $derived(
-		capabilityForEnvironment($swarmCapability, $currentEnvironment?.id)
+		activeEnvironmentGroup?.kind === 'swarm-cluster'
+			? activeEnvironmentGroup.nodes.find((node) => node.environment.id === activeEnvironmentGroup.managerEnvironmentId)?.capability
+			: capabilityForEnvironment($swarmCapability, $currentEnvironment?.id)
 	);
 	const sidebar = useSidebar();
 

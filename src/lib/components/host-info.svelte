@@ -488,27 +488,14 @@
 								</button>
 								<div class="ml-5 border-l pl-2">
 									{#each group.nodes as node (node.environment.id)}
-										<div class="flex items-center pr-2 hover:bg-muted/70 rounded-sm">
+										<div class="flex items-center hover:bg-muted/70 rounded-sm">
 											<button
 												onclick={() => openSwarmNode(group, node.capability.nodeId)}
-												class="min-w-0 flex-1 flex items-center gap-2 px-2 py-1.5 text-left"
+												class="w-full min-w-0 flex items-center gap-2 px-2 py-1.5 text-left"
 											>
 												<Server class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
 												<span class="truncate text-sm">{node.name}</span>
 												<SwarmBadge capability={node.capability} compact />
-											</button>
-											<button
-												onclick={() => switchEnvironment(node.environment.id)}
-												class="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-												title={`Use ${node.name} endpoint for node-local Docker views`}
-											>
-												{#if switchingEnvId === node.environment.id}
-													<Loader2 class="h-3.5 w-3.5 animate-spin" />
-												{:else if Number(node.environment.id) === Number(currentEnvId)}
-													<Check class="h-3.5 w-3.5 text-primary" />
-												{:else}
-													<Route class="h-3.5 w-3.5" />
-												{/if}
 											</button>
 										</div>
 									{/each}

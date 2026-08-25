@@ -74,10 +74,12 @@ describe('cluster navigation wiring', () => {
 		const dashboard = readFileSync(new URL('../src/routes/+page.svelte', import.meta.url), 'utf8');
 		const swarmPage = readFileSync(new URL('../src/routes/swarm/+page.svelte', import.meta.url), 'utf8');
 		const swarmStore = readFileSync(new URL('../src/lib/stores/swarm.ts', import.meta.url), 'utf8');
+		const sidebar = readFileSync(new URL('../src/lib/components/app-sidebar.svelte', import.meta.url), 'utf8');
 
 		assert.match(selector, /groupEnvironments\(envList, \$swarmEnvironmentCapabilities\.capabilities\)/);
 		assert.match(selector, /openSwarmNode\(group, node\.capability\.nodeId\)/);
-		assert.match(selector, /Use \$\{node\.name\} endpoint for node-local Docker views/);
+		assert.doesNotMatch(selector, /switchEnvironment\(node\.environment\.id\)/);
+		assert.doesNotMatch(selector, /endpoint for node-local Docker views/);
 		assert.match(dashboard, /goto\(tile\.cluster \? '\/swarm\?tab=overview'/);
 		assert.match(dashboard, /const displayTiles[^=]*= \$derived\.by/);
 		assert.match(swarmPage, /swarmManagerEnvironmentId\(environmentGroups, selectedId\)/);
@@ -85,5 +87,8 @@ describe('cluster navigation wiring', () => {
 		assert.match(swarmPage, /title=\{activeCluster\?\.name \?\? 'Docker Swarm'\}/);
 		assert.match(swarmStore, /fetch\(`\/api\/swarm\?env=\$\{environmentId\}`\)/);
 		assert.match(swarmStore, /if \(requestId !== requestSequence\) return/);
+		assert.match(swarmStore, /swarmManagerEnvironmentId\([\s\S]*selected\?\.id/);
+		assert.match(swarmStore, /currentEnvironment\.set\(\{ id: logicalEnvironment\.id, name: logicalEnvironment\.name \}\)/);
+		assert.match(sidebar, /activeEnvironmentGroup\?\.kind === 'swarm-cluster'/);
 	});
 });
