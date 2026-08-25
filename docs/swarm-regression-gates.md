@@ -8,7 +8,8 @@ The Swarm branch uses a diff-first gate because the upstream tree currently has 
 - Captured: 2026-08-25
 - Toolchain: Node 22.23.2, npm 9.2.0, Bun 1.3.14, Vite 7.3.6, svelte-check 4.7.6
 - Result: `npm run build` stops in unchanged upstream Svelte files when Rollup receives TypeScript syntax. Module traversal can expose either `registry/+page.svelte:151:58` or `schedules/+page.svelte:769:57` first.
-- Exact file hashes and accepted signatures are stored in `scripts/swarm-gate-baseline.json`.
+- The baseline also contains the existing `host-info.svelte` `highlightChanges` type diagnostic. It is matched by stable file and message because unrelated edits can shift its line number.
+- Exact file hashes and accepted build/diagnostic signatures are stored in `scripts/swarm-gate-baseline.json`.
 
 Neither baseline file belongs in a Swarm slice. Do not patch the parser error, Dockerfile, lockfile, or toolchain on this branch.
 

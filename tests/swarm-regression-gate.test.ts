@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isKnownBuildFailure, parseBuildFailure } from '../scripts/swarm-regression-gate';
+import {
+	isKnownBuildFailure,
+	isKnownDiagnostic,
+	parseBuildFailure,
+	parseDiagnostics
+} from '../scripts/swarm-regression-gate';
 
 describe('Swarm regression gate baseline classification', () => {
 	it('recognizes the confirmed origin/main registry parser blocker', () => {
@@ -25,5 +30,11 @@ file: /tmp/baseline/src/routes/registry/+page.svelte:151:58
 			column: 58,
 			message: "Expected ',', got '?'"
 		}, '6da5dfe17ba3102eac4a4aad47a6818dfaad69fb5c0e432d79d09f81ff0e4aea'), false);
+	});
+
+	it('compares diagnostics by stable file and message instead of shifted line numbers', () => {
+		const [diagnostic] = parseDiagnostics(`1787649980619 ERROR "src/lib/components/host-info.svelte" 194:46 "Property 'highlightChanges' does not exist on type 'Environment & { icon?: string | undefined; connectionType?: string | undefined; hawserVersion?: string | undefined; }'."`);
+		assert.equal(isKnownDiagnostic(diagnostic), true);
+		assert.equal(isKnownDiagnostic({ ...diagnostic, file: 'src/routes/swarm/+page.svelte' }), false);
 	});
 });

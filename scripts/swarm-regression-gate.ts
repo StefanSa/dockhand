@@ -18,6 +18,11 @@ export interface BuildFailure {
 	message: string;
 }
 
+export interface GateDiagnostic {
+	file: string;
+	message: string;
+}
+
 interface GateOptions {
 	base: string;
 	head?: string;
@@ -158,11 +163,25 @@ function assertSvelteParses(files: string[], head?: string): void {
 	console.log('PASS changed-svelte-parse');
 }
 
-function diagnosticFiles(output: string): string[] {
+export function parseDiagnostics(output: string): GateDiagnostic[] {
 	return output.split('\n').flatMap((line) => {
-		const match = line.match(/\bERROR\s+"([^"]+)"/);
-		return match ? [match[1].replaceAll('\\\\', '/')] : [];
+		const match = line.match(/\bERROR\s+("(?:[^"\\]|\\.)+")\s+\d+:\d+\s+(".*")$/);
+		if (!match) return [];
+		try {
+			return [{
+				file: (JSON.parse(match[1]) as string).replaceAll('\\\\', '/'),
+				message: JSON.parse(match[2]) as string
+			}];
+		} catch {
+			return [];
+		}
 	});
+}
+
+export function isKnownDiagnostic(diagnostic: GateDiagnostic): boolean {
+	return baseline.knownDiagnostics.some((known) =>
+		known.file === diagnostic.file && known.message === diagnostic.message
+	);
 }
 
 function assertNoChangedFileDiagnostics(files: string[]): void {
@@ -172,9 +191,13 @@ function assertNoChangedFileDiagnostics(files: string[]): void {
 		return;
 	}
 	const result = run('npx', ['svelte-check', '--tsconfig', './tsconfig.json', '--threshold', 'error', '--output', 'machine']);
-	const newDiagnostics = [...new Set(diagnosticFiles(result.output).filter((file) => checkable.has(file)))];
+	const newDiagnostics = parseDiagnostics(result.output).filter((diagnostic) =>
+		checkable.has(diagnostic.file) && !isKnownDiagnostic(diagnostic)
+	);
 	if (newDiagnostics.length) {
-		throw new Error(`Changed files have diagnostics:\n${newDiagnostics.join('\n')}`);
+		throw new Error(`Changed files have new diagnostics:\n${newDiagnostics.map((diagnostic) =>
+			`${diagnostic.file}: ${diagnostic.message}`
+		).join('\n')}`);
 	}
 	console.log(`PASS changed-file-diagnostics (${checkable.size} files; unchanged baseline diagnostics ignored)`);
 }

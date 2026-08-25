@@ -26,6 +26,12 @@
       "sha256": "ef288e361731e8533376b9e72de153ea0b655da87e9eb5dad26e8bd2d3c0e8d6"
     }
   ],
+  "knownDiagnostics": [
+    {
+      "file": "src/lib/components/host-info.svelte",
+      "message": "Property 'highlightChanges' does not exist on type 'Environment & { icon?: string | undefined; connectionType?: string | undefined; hawserVersion?: string | undefined; }'."
+    }
+  ],
   "protectedFiles": [
     "src/routes/registry/+page.svelte",
     "src/routes/schedules/+page.svelte",
