@@ -134,10 +134,5 @@ export function swarmManagerEnvironmentId(
 export function environmentGroupMatches(group: EnvironmentGroup, search: string): boolean {
 	const query = search.trim().toLowerCase();
 	if (!query) return true;
-	if (group.name.toLowerCase().includes(query)) return true;
-	return group.kind === 'swarm-cluster' && group.nodes.some((node) =>
-		node.name.toLowerCase().includes(query)
-		|| node.environment.name.toLowerCase().includes(query)
-		|| node.role.includes(query)
-	);
+	return group.name.toLowerCase().includes(query);
 }

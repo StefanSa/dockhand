@@ -32,6 +32,7 @@
 	import { copyToClipboard } from '$lib/utils/clipboard';
 	import type { SwarmConfigSummary, SwarmNodeSummary, SwarmReadModel, SwarmSecretSummary, SwarmServiceSummary, SwarmStackSummary } from '$lib/types/swarm';
 	import { filterSwarmTasks, SWARM_TASK_FILTERS, swarmTaskCounts, type SwarmTaskFilter } from '$lib/swarm-tasks';
+	import { filterSwarmNodes, SWARM_NODE_FILTERS, swarmNodeCounts, type SwarmNodeFilter } from '$lib/swarm-nodes';
 	import { isSwarmDetailAvailable, parseSwarmDetail, swarmDetailHref, swarmTabHref, SWARM_TABS, type SwarmDetailKind, type SwarmTab } from '$lib/swarm-navigation';
 	import { planSwarmConfigReplacement } from '$lib/swarm-config-replacement';
 	import { servicesForSwarmNode, tasksForSwarmNode, tasksForSwarmService } from '$lib/swarm-relations';
@@ -52,6 +53,8 @@
 	let activeTab = $state('overview');
 	let taskFilter = $state<SwarmTaskFilter>('active');
 	let taskSearch = $state('');
+	let nodeFilter = $state<SwarmNodeFilter>('all');
+	let nodeSearch = $state('');
 	let data = $state<SwarmReadModel | null>(null);
 	let loading = $state(false);
 	let refreshing = $state(false);
@@ -108,6 +111,8 @@
 	const activeEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, $currentEnvironment?.id));
 	const activeCluster = $derived(activeEnvironmentGroup?.kind === 'swarm-cluster' ? activeEnvironmentGroup : null);
 	const taskCounts = $derived(swarmTaskCounts(data?.tasks ?? []));
+	const nodeCounts = $derived(swarmNodeCounts(data?.nodes ?? []));
+	const visibleNodes = $derived(filterSwarmNodes(data?.nodes ?? [], nodeFilter, nodeSearch));
 	const visibleTasks = $derived(filterSwarmTasks(
 		data?.tasks ?? [],
 		taskFilter,
@@ -1065,10 +1070,39 @@
 			</Tabs.Content>
 
 			<Tabs.Content value="nodes" class="min-h-0 overflow-auto rounded-md border">
+				<div class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b bg-background p-2">
+					<div class="flex flex-wrap items-center gap-1">
+						{#each SWARM_NODE_FILTERS as filter (filter.value)}
+							<Button
+								size="sm"
+								variant={nodeFilter === filter.value ? 'secondary' : 'ghost'}
+								class="h-7 gap-1.5 px-2 text-xs"
+								onclick={() => nodeFilter = filter.value}
+							>
+								{filter.label}
+								<Badge variant="outline" class="h-4 min-w-4 px-1 text-2xs">{nodeCounts[filter.value]}</Badge>
+							</Button>
+						{/each}
+					</div>
+					<div class="relative ml-auto min-w-52 flex-1 sm:max-w-xs">
+						<Search class="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							type="search"
+							placeholder="Search nodes…"
+							class="h-7 pl-7 text-xs"
+							bind:value={nodeSearch}
+						/>
+					</div>
+				</div>
+				{#if visibleNodes.length === 0}
+					<div class="flex min-h-32 items-center justify-center text-sm text-muted-foreground">
+						No nodes match the current filter and search.
+					</div>
+				{:else}
 				<Table.Root>
 					<Table.Header><Table.Row><Table.Head>Node</Table.Head><Table.Head>Role</Table.Head><Table.Head>Availability</Table.Head><Table.Head>Status</Table.Head><Table.Head>Manager</Table.Head><Table.Head>Engine</Table.Head><Table.Head>Resources</Table.Head>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<Table.Head class="text-right">Actions</Table.Head>{/if}</Table.Row></Table.Header>
 					<Table.Body>
-						{#each data.nodes as node (node.id)}
+						{#each visibleNodes as node (node.id)}
 							<Table.Row>
 								<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('node', node.id)}>{node.hostname}</a><div class="text-xs text-muted-foreground font-mono">{node.address ?? node.id.slice(0, 12)}</div></Table.Cell>
 								<Table.Cell><Badge variant={node.role === 'manager' ? 'secondary' : 'outline'} class="capitalize">{node.role}</Badge></Table.Cell>
@@ -1093,6 +1127,7 @@
 						{/each}
 					</Table.Body>
 				</Table.Root>
+				{/if}
 			</Tabs.Content>
 
 			{#if !selectedService}

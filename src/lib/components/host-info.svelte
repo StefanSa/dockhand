@@ -14,7 +14,6 @@
 	import SwarmBadge from '$lib/components/SwarmBadge.svelte';
 	import { swarmEnvironmentCapabilities } from '$lib/stores/swarm';
 	import { environmentGroupForId, environmentGroupMatches, groupEnvironments, type SwarmEnvironmentCluster } from '$lib/environment-grouping';
-	import { swarmDetailHref } from '$lib/swarm-navigation';
 
 	// Font size scaling for header
 	let fontSize = $state<FontSize>('normal');
@@ -118,8 +117,8 @@
 
 	// Reactive environment list from store
 	let envList = $derived($environments);
-	const showSearch = $derived(envList.length > 8);
 	const environmentGroups = $derived(groupEnvironments(envList, $swarmEnvironmentCapabilities.capabilities));
+	const showSearch = $derived(environmentGroups.length > 8);
 	const filteredEnvironmentGroups = $derived(environmentGroups.filter((group) => environmentGroupMatches(group, searchTerm)));
 	const selectedEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, currentEnvId));
 
@@ -325,11 +324,6 @@
 		await switchEnvironment(cluster.managerEnvironmentId, '/swarm?tab=overview');
 	}
 
-	async function openSwarmNode(cluster: SwarmEnvironmentCluster, nodeId: string | undefined): Promise<void> {
-		if (!nodeId) return;
-		await switchEnvironment(cluster.managerEnvironmentId, swarmDetailHref('node', nodeId));
-	}
-
 	function formatMemory(bytes: number): string {
 		const gb = bytes / (1024 * 1024 * 1024);
 		return `${gb.toFixed(1)} GB`;
@@ -486,20 +480,6 @@
 									</span>
 									<SwarmBadge capability={managerNode?.capability} compact />
 								</button>
-								<div class="ml-5 border-l pl-2">
-									{#each group.nodes as node (node.environment.id)}
-										<div class="flex items-center hover:bg-muted/70 rounded-sm">
-											<button
-												onclick={() => openSwarmNode(group, node.capability.nodeId)}
-												class="w-full min-w-0 flex items-center gap-2 px-2 py-1.5 text-left"
-											>
-												<Server class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-												<span class="truncate text-sm">{node.name}</span>
-												<SwarmBadge capability={node.capability} compact />
-											</button>
-										</div>
-									{/each}
-								</div>
 							</div>
 						{:else}
 							{@const env = group.environment}

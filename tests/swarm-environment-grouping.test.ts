@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
 	enrichCapabilitiesWithManagerTopology,
 	environmentGroupForId,
+	environmentGroupMatches,
 	groupEnvironments,
 	swarmManagerEnvironmentId
 } from '../src/lib/environment-grouping';
@@ -53,6 +54,8 @@ describe('Swarm environment grouping', () => {
 		assert.equal(swarmManagerEnvironmentId(groups, 1), 1);
 		assert.equal(swarmManagerEnvironmentId(groups, 2), 1);
 		assert.equal(swarmManagerEnvironmentId(groups, 3), 3);
+		assert.equal(environmentGroupMatches(cluster, 'Home Lab'), true);
+		assert.equal(environmentGroupMatches(cluster, 'swarm-wrk02'), false);
 	});
 
 	it('does not group environments by similar names', () => {
@@ -77,7 +80,8 @@ describe('cluster navigation wiring', () => {
 		const sidebar = readFileSync(new URL('../src/lib/components/app-sidebar.svelte', import.meta.url), 'utf8');
 
 		assert.match(selector, /groupEnvironments\(envList, \$swarmEnvironmentCapabilities\.capabilities\)/);
-		assert.match(selector, /openSwarmNode\(group, node\.capability\.nodeId\)/);
+		assert.doesNotMatch(selector, /openSwarmNode/);
+		assert.doesNotMatch(selector, /#each group\.nodes as node/);
 		assert.doesNotMatch(selector, /switchEnvironment\(node\.environment\.id\)/);
 		assert.doesNotMatch(selector, /endpoint for node-local Docker views/);
 		assert.match(dashboard, /goto\(tile\.cluster \? '\/swarm\?tab=overview'/);
@@ -85,6 +89,8 @@ describe('cluster navigation wiring', () => {
 		assert.match(swarmPage, /swarmManagerEnvironmentId\(environmentGroups, selectedId\)/);
 		assert.match(swarmPage, /if \(nextId === environmentId\) return/);
 		assert.match(swarmPage, /title=\{activeCluster\?\.name \?\? 'Docker Swarm'\}/);
+		assert.match(swarmPage, /#each visibleNodes as node/);
+		assert.match(swarmPage, /href=\{detailHref\('node', node\.id\)\}/);
 		assert.match(swarmStore, /fetch\(`\/api\/swarm\?env=\$\{environmentId\}`\)/);
 		assert.match(swarmStore, /if \(requestId !== requestSequence\) return/);
 		assert.match(swarmStore, /swarmManagerEnvironmentId\([\s\S]*selected\?\.id/);
