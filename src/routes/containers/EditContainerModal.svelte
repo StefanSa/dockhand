@@ -2,7 +2,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Button } from '$lib/components/ui/button';
 	import { Pencil, Check, Loader2, X, Layers, Settings, Archive } from 'lucide-svelte';
-	import { currentEnvironment, appendEnvParam } from '$lib/stores/environment';
+	import { currentEnvironment, environments, appendEnvParam } from '$lib/stores/environment';
 	import { page } from '$app/stores'; // BETA GATE: backups feature flag
 	import { focusFirstInput } from '$lib/utils';
 	import ContainerSettingsTab from './ContainerSettingsTab.svelte';
@@ -61,11 +61,14 @@
 	interface Props {
 		open: boolean;
 		containerId: string;
+		environmentId?: number | null;
 		onClose: () => void;
 		onSuccess: () => void;
 	}
 
-	let { open = $bindable(), containerId, onClose, onSuccess }: Props = $props();
+	let { open = $bindable(), containerId, environmentId, onClose, onSuccess }: Props = $props();
+	const effectiveEnvironmentId = $derived(environmentId ?? $currentEnvironment?.id ?? null);
+	const effectiveEnvironment = $derived($environments.find((environment) => environment.id === effectiveEnvironmentId) ?? null);
 
 	// Config sets
 	let configSets = $state<ConfigSet[]>([]);
@@ -170,7 +173,7 @@
 	let autoUpdateCronExpression = $state('0 3 * * *');
 	let vulnerabilityCriteria = $state<VulnerabilityCriteria>('never');
 	let currentEnvId = $state<number | null>(null);
-	currentEnvironment.subscribe(env => currentEnvId = env?.id || null);
+	$effect(() => { currentEnvId = effectiveEnvironmentId; });
 
 	// Track original values to detect changes
 	let originalConfig = $state<{
@@ -337,7 +340,7 @@
 	async function loadContainerData() {
 		loadingData = true;
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${containerId}`, $currentEnvironment?.id));
+			const response = await fetch(appendEnvParam(`/api/containers/${containerId}`, effectiveEnvironmentId));
 			const data = await response.json();
 
 			if (!response.ok || data.error) {
@@ -613,7 +616,7 @@
 			loadingData = false;
 			// Fetch backup schedule count (BETA GATE: only when backups enabled)
 			if ($page.data.backupsEnabled) try {
-				const envId = $currentEnvironment?.id;
+				const envId = effectiveEnvironmentId;
 				const bp = new URLSearchParams({ target: name, type: 'container' });
 				if (envId) bp.set('env', String(envId));
 				const bRes = await fetch(`/api/backup/configs?${bp}`);
@@ -837,7 +840,7 @@
 
 				const response = await fetch(appendEnvParam(
 					`/api/containers/${containerId}/rename`,
-					$currentEnvironment?.id
+					effectiveEnvironmentId
 				), {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
@@ -1001,7 +1004,7 @@
 					ulimits: ulimitsArray.length > 0 ? ulimitsArray : null
 				};
 
-				const response = await fetch(appendEnvParam(`/api/containers/${containerId}/update`, $currentEnvironment?.id), {
+				const response = await fetch(appendEnvParam(`/api/containers/${containerId}/update`, effectiveEnvironmentId), {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify(payload),
@@ -1154,8 +1157,8 @@
 					>
 						<Pencil class="w-3 h-3 text-muted-foreground hover:text-foreground" />
 					</button>
-					{#if $currentEnvironment}
-						<span class="font-semibold ml-1">on <span class="text-amber-600 dark:text-amber-400">{$currentEnvironment.name}</span></span>
+					{#if effectiveEnvironment}
+						<span class="font-semibold ml-1">on <span class="text-amber-600 dark:text-amber-400">{effectiveEnvironment.name}</span></span>
 					{/if}
 				{/if}
 			</Dialog.Title>
@@ -1220,7 +1223,7 @@
 				<ContainerSettingsTab
 					mode="edit"
 					{containerId}
-					envId={$currentEnvironment?.id ?? undefined}
+					envId={effectiveEnvironmentId ?? undefined}
 					bind:name
 					bind:image
 					bind:command

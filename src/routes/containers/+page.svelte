@@ -85,6 +85,18 @@
 	import { EmptyState, NoEnvironment } from '$lib/components/ui/empty-state';
 	import { currentEnvironment, environments, appendEnvParam, clearStaleEnvironment } from '$lib/stores/environment';
 	import { containerStore } from '$lib/stores/containers';
+	import { swarmEnvironmentCapabilities } from '$lib/stores/swarm';
+	import { environmentGroupForId, groupEnvironments, type SwarmEnvironmentCluster } from '$lib/environment-grouping';
+	import {
+		aggregateSwarmContainers,
+		compareContainerNodes,
+		containerEnvironmentId,
+		matchesContainerNode,
+		matchesContainerSearch,
+		type SwarmContainerInfo,
+		type SwarmContainerNodeIssue,
+		type SwarmTopologyNode
+	} from '$lib/swarm-containers';
 	import { onDockerEvent, isContainerListChange } from '$lib/stores/events';
 	import { appSettings } from '$lib/stores/settings';
 	import { canAccess } from '$lib/stores/auth';
@@ -104,16 +116,23 @@
 	// Track change detection for stat highlighting (UI-only, stays in component)
 	let changedFields = $state<Map<string, Set<string>>>(new Map());
 
-	type SortField = 'name' | 'image' | 'state' | 'health' | 'uptime' | 'stack' | 'ip' | 'cpu' | 'memory' | 'ports';
+	type SortField = 'name' | 'node' | 'image' | 'state' | 'health' | 'uptime' | 'stack' | 'ip' | 'cpu' | 'memory' | 'ports';
 	type SortDirection = 'asc' | 'desc';
 
 	// Data from persistent store (survives page navigation)
-	const containers = $derived($containerStore.data);
+	const environmentGroups = $derived(groupEnvironments($environments, $swarmEnvironmentCapabilities.capabilities));
+	const activeEnvironmentGroup = $derived(environmentGroupForId(environmentGroups, $currentEnvironment?.id));
+	const activeSwarmCluster = $derived(activeEnvironmentGroup?.kind === 'swarm-cluster' ? activeEnvironmentGroup : null);
+	let swarmContainers = $state<SwarmContainerInfo[]>([]);
+	let swarmNodeIssues = $state<SwarmContainerNodeIssue[]>([]);
+	let swarmContainersLoading = $state(false);
+	let swarmRequestSequence = 0;
+	const containers = $derived<ContainerInfo[]>(activeSwarmCluster ? swarmContainers : $containerStore.data);
 	const containerStats = $derived($containerStore.stats);
 	const autoUpdateSettings = $derived($containerStore.autoUpdateSettings);
 	const envHasScanning = $derived($containerStore.envHasScanning);
 	const envVulnerabilityCriteria = $derived($containerStore.envVulnerabilityCriteria);
-	const loading = $derived($containerStore.loading);
+	const loading = $derived(activeSwarmCluster ? swarmContainersLoading : $containerStore.loading);
 
 	let envId = $state<number | null>(null);
 
@@ -126,6 +145,11 @@
 	let searchQuery = $state(initialSearch);
 	let sortField = $state<SortField>('name');
 	let sortDirection = $state<SortDirection>('asc');
+	let nodeFilter = $state<string[]>([]);
+	const nodeFilterOptions = $derived(activeSwarmCluster?.nodes.map((node) => ({
+		value: String(node.environment.id),
+		label: `${node.name} (${node.role === 'manager' ? 'Manager' : 'Worker'})`
+	})) ?? []);
 
 	// Status filter state — also carries the synthetic 'update-available'
 	// pseudo-status (#1063), which ANDs with actual Docker states.
@@ -192,16 +216,48 @@
 
 	// Track if initial fetch has been done
 	let initialFetchDone = $state(false);
+	let dataContextKey = $state<string | null>(null);
+
+	async function refreshSwarmContainers(cluster: SwarmEnvironmentCluster): Promise<void> {
+		const requestId = ++swarmRequestSequence;
+		swarmContainersLoading = true;
+		try {
+			let topologyNodes: SwarmTopologyNode[] = [];
+			try {
+				const topologyResponse = await fetch(`/api/swarm?env=${cluster.managerEnvironmentId}`);
+				if (topologyResponse.ok) {
+					const model = await topologyResponse.json();
+					topologyNodes = Array.isArray(model.nodes) ? model.nodes : [];
+				}
+			} catch {
+				// Registered endpoints are still authoritative for container data.
+			}
+
+			const result = await aggregateSwarmContainers(cluster.nodes, topologyNodes, async (environmentId) =>
+				fetch(appendEnvParam('/api/containers', environmentId))
+			);
+			if (requestId !== swarmRequestSequence) return;
+			swarmContainers = result.containers;
+			swarmNodeIssues = result.issues;
+		} finally {
+			if (requestId === swarmRequestSequence) swarmContainersLoading = false;
+		}
+	}
 
 	// Subscribe to environment changes using $effect
 	$effect(() => {
 		const env = $currentEnvironment;
-		const newEnvId = env?.id ?? null;
+		const capabilitiesReady = $swarmEnvironmentCapabilities.initialized;
+		const group = activeEnvironmentGroup;
+		if (env && !capabilitiesReady) return;
+		const newEnvId = group?.kind === 'swarm-cluster' ? group.managerEnvironmentId : env?.id ?? null;
+		const newContextKey = group?.key ?? (env ? `environment:${env.id}` : null);
 
 		// Only fetch if environment actually changed or this is initial load
-		if (env && (newEnvId !== envId || !initialFetchDone)) {
-			const isEnvSwitch = envId !== null && newEnvId !== envId;
+		if (env && newEnvId && (newContextKey !== dataContextKey || !initialFetchDone)) {
+			const isEnvSwitch = dataContextKey !== null && newContextKey !== dataContextKey;
 			envId = newEnvId;
+			dataContextKey = newContextKey;
 			initialFetchDone = true;
 			// (CheckUpdatesButton resets its own state when envId changes)
 			// Clear shell detection cache for new environment
@@ -210,34 +266,52 @@
 			if (isEnvSwitch) {
 				// Full env switch — invalidate cache, show spinner
 				containerStore.invalidate();
+				swarmContainers = [];
+				swarmNodeIssues = [];
+				nodeFilter = [];
+				sortField = 'name';
+				sortDirection = 'asc';
+				selectedContainers = new Set();
 			}
-			// Refresh data (store handles loading state internally)
-			containerStore.refresh(newEnvId);
+			if (group?.kind === 'swarm-cluster') {
+				void refreshSwarmContainers(group);
+			} else {
+				// Standalone keeps the existing persistent-store path unchanged.
+				void containerStore.refresh(newEnvId);
+			}
 		} else if (!env) {
 			// No environment - clear data and stop loading
+			swarmRequestSequence++;
 			envId = null;
+			dataContextKey = null;
 			shellDetectionCache = {};
+			swarmContainers = [];
+			swarmNodeIssues = [];
 			containerStore.clear();
 		}
 	});
 	let showCreateModal = $state(false);
 	let showEditModal = $state(false);
 	let editContainerId = $state('');
+	let editContainerEnvironmentId = $state<number | null>(null);
 
 	// Inspect modal state
 	let showInspectModal = $state(false);
 	let inspectContainerId = $state('');
 	let inspectContainerName = $state('');
+	let inspectContainerEnvironmentId = $state<number | null>(null);
 
 	// File browser modal state
 	let showFileBrowserModal = $state(false);
 	let fileBrowserContainerId = $state('');
 	let fileBrowserContainerName = $state('');
+	let fileBrowserEnvironmentId = $state<number | null>(null);
 
 	// Terminal state - track active terminals per container
 	interface ActiveTerminal {
 		containerId: string;
 		containerName: string;
+		environmentId: number | null;
 		shell: string;
 		user: string;
 	}
@@ -316,17 +390,17 @@
 	let batchOpOptions = $state<Record<string, any>>({});
 
 	// Set of container IDs with updates available (for O(1) lookup)
-	const containersWithUpdatesSet = $derived(new Set(batchUpdateContainerIds));
+	const containersWithUpdatesSet = $derived(new Set(activeSwarmCluster ? [] : batchUpdateContainerIds));
 
 	// Whether any semver badges are showing (may be true with zero digest updates).
-	const hasNewerVersions = $derived($containerStore.newerVersions.size > 0);
+	const hasNewerVersions = $derived(!activeSwarmCluster && $containerStore.newerVersions.size > 0);
 
 	// Container IDs whose last update check failed (e.g. registry rate-limited) — #1255
-	const containersWithFailedCheckSet = $derived(new Set($containerStore.failedUpdateIds));
+	const containersWithFailedCheckSet = $derived(new Set(activeSwarmCluster ? [] : $containerStore.failedUpdateIds));
 	const failedUpdateErrors = $derived($containerStore.failedUpdateErrors);
 
 	// Newer-version-tag (semver) suggestions from the last check, keyed by container ID.
-	const newerVersionsMap = $derived($containerStore.newerVersions);
+	const newerVersionsMap = $derived(activeSwarmCluster ? new Map() : $containerStore.newerVersions);
 
 	// Filter dropdown entries: real statuses plus the synthetic
 	// "update-available" entry, only offered once we know about a pending
@@ -387,12 +461,34 @@
 	}
 
 	// Bulk actions - now use BatchOperationModal
-	function startBatchOperation(
+	async function startBatchOperation(
 		opTitle: string,
 		operation: string,
 		targetContainers: ContainerInfo[],
 		options: Record<string, any> = {}
 	) {
+		if (activeSwarmCluster) {
+			bulkActionInProgress = true;
+			try {
+				const results = await Promise.all(targetContainers.map(async (container) => {
+					const path = operation === 'remove'
+						? `/api/containers/${container.id}?force=${options.force === true}`
+						: `/api/containers/${container.id}/${operation}`;
+					const response = await fetch(appendEnvParam(path, targetEnvironmentId(container)), {
+						method: operation === 'remove' ? 'DELETE' : 'POST'
+					});
+					return response.ok;
+				}));
+				const failed = results.filter((ok) => !ok).length;
+				if (failed > 0) toast.error(`${failed} container action${failed === 1 ? '' : 's'} failed`);
+				else toast.success(opTitle);
+				selectedContainers = new Set();
+				await fetchContainers();
+			} finally {
+				bulkActionInProgress = false;
+			}
+			return;
+		}
 		batchOpTitle = opTitle;
 		batchOpOperation = operation;
 		batchOpItems = targetContainers.map(c => ({ id: c.id, name: c.name }));
@@ -406,7 +502,7 @@
 
 	function handleBatchOpComplete() {
 		selectedContainers = new Set();
-		containerStore.refreshContainers(envId);
+		void fetchContainers();
 	}
 
 	function bulkStart() {
@@ -632,7 +728,8 @@
 
 		detectingShellsFor = containerId;
 		try {
-			const result = await detectShells(containerId, $currentEnvironment?.id ?? null);
+			const container = containers.find((item) => item.id === containerId);
+			const result = await detectShells(containerId, targetEnvironmentId(container));
 			shellDetectionCache[containerId] = result;
 
 			// Auto-select best available shell if current is not available
@@ -658,6 +755,7 @@
 	interface ActiveLogs {
 		containerId: string;
 		containerName: string;
+		environmentId: number | null;
 	}
 	let activeLogs = $state<ActiveLogs[]>([]);
 	let currentLogsContainerId = $state<string | null>(null);
@@ -754,14 +852,14 @@
 			result = result.filter((c) => containersWithUpdatesSet.has(c.id));
 		}
 
+		if (activeSwarmCluster && nodeFilter.length > 0) {
+			const selectedEnvironmentIds = nodeFilter.map(Number);
+			result = result.filter((container) => matchesContainerNode(container as SwarmContainerInfo, selectedEnvironmentIds));
+		}
+
 		// Filter by search query
 		if (searchQuery.trim()) {
-			const query = searchQuery.toLowerCase();
-			result = result.filter(c =>
-				c.name.toLowerCase().includes(query) ||
-				c.image.toLowerCase().includes(query) ||
-				(c.labels?.['com.docker.compose.project'] || '').toLowerCase().includes(query)
-			);
+			result = result.filter((container) => matchesContainerSearch(container, searchQuery));
 		}
 
 		// Sort
@@ -770,6 +868,9 @@
 			switch (sortField) {
 				case 'name':
 					cmp = a.name.localeCompare(b.name);
+					break;
+				case 'node':
+					cmp = compareContainerNodes(a as SwarmContainerInfo, b as SwarmContainerInfo);
 					break;
 				case 'image':
 					cmp = a.image.localeCompare(b.image);
@@ -850,9 +951,14 @@
 	const selectedStopped = $derived(selectedNonSystem.filter(c => c.state !== 'running' && c.state !== 'paused'));
 	const selectedPaused = $derived(selectedNonSystem.filter(c => c.state === 'paused'));
 
-	// Thin wrappers — delegate to persistent store
 	function fetchContainers() {
-		return containerStore.refreshContainers(envId);
+		return activeSwarmCluster
+			? refreshSwarmContainers(activeSwarmCluster)
+			: containerStore.refreshContainers(envId);
+	}
+
+	function targetEnvironmentId(container: ContainerInfo | undefined): number | null {
+		return container ? containerEnvironmentId(container, envId) : envId;
 	}
 
 	// Check if highlightChanges is enabled for current environment
@@ -912,7 +1018,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}/start`, envId), { method: 'POST' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}/start`, targetEnvironmentId(container)), { method: 'POST' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to start container' };
@@ -921,7 +1027,7 @@
 				return;
 			}
 			toast.success(`Started ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to start container:', error);
 			operationError = { id, message: 'Failed to start container' };
@@ -936,7 +1042,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}/stop`, envId), { method: 'POST' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}/stop`, targetEnvironmentId(container)), { method: 'POST' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to stop container' };
@@ -945,7 +1051,7 @@
 				return;
 			}
 			toast.success(`Stopped ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to stop container:', error);
 			operationError = { id, message: 'Failed to stop container' };
@@ -961,7 +1067,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}/pause`, envId), { method: 'POST' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}/pause`, targetEnvironmentId(container)), { method: 'POST' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to pause container' };
@@ -970,7 +1076,7 @@
 				return;
 			}
 			toast.success(`Paused ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to pause container:', error);
 			operationError = { id, message: 'Failed to pause container' };
@@ -984,7 +1090,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}/unpause`, envId), { method: 'POST' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}/unpause`, targetEnvironmentId(container)), { method: 'POST' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to unpause container' };
@@ -993,7 +1099,7 @@
 				return;
 			}
 			toast.success(`Resumed ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to unpause container:', error);
 			operationError = { id, message: 'Failed to unpause container' };
@@ -1008,7 +1114,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}/restart`, envId), { method: 'POST' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}/restart`, targetEnvironmentId(container)), { method: 'POST' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to restart container' };
@@ -1017,7 +1123,7 @@
 				return;
 			}
 			toast.success(`Restarted ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to restart container:', error);
 			operationError = { id, message: 'Failed to restart container' };
@@ -1033,7 +1139,7 @@
 		const container = containers.find(c => c.id === id);
 		const name = container?.name || id.slice(0, 12);
 		try {
-			const response = await fetch(appendEnvParam(`/api/containers/${id}?force=true`, envId), { method: 'DELETE' });
+			const response = await fetch(appendEnvParam(`/api/containers/${id}?force=true`, targetEnvironmentId(container)), { method: 'DELETE' });
 			if (!response.ok) {
 				const data = await response.json();
 				operationError = { id, message: data.error || 'Failed to remove container' };
@@ -1042,7 +1148,7 @@
 				return;
 			}
 			toast.success(`Removed ${name}`);
-			await containerStore.refreshContainers(envId);
+			await fetchContainers();
 		} catch (error) {
 			console.error('Failed to remove container:', error);
 			operationError = { id, message: 'Failed to remove container' };
@@ -1074,6 +1180,7 @@
 		const terminal: ActiveTerminal = {
 			containerId: container.id,
 			containerName: container.name,
+			environmentId: targetEnvironmentId(container),
 			shell: terminalShell,
 			user: terminalUser
 		};
@@ -1098,7 +1205,8 @@
 			// Create new logs session
 			const logs: ActiveLogs = {
 				containerId: container.id,
-				containerName: container.name
+				containerName: container.name,
+				environmentId: targetEnvironmentId(container)
 			};
 			activeLogs = [...activeLogs, logs];
 			currentLogsContainerId = container.id;
@@ -1131,19 +1239,23 @@
 	}
 
 	function editContainer(id: string) {
+		const container = containers.find((item) => item.id === id);
 		editContainerId = id;
+		editContainerEnvironmentId = targetEnvironmentId(container);
 		showEditModal = true;
 	}
 
 	function inspectContainer(container: ContainerInfo) {
 		inspectContainerId = container.id;
 		inspectContainerName = container.name;
+		inspectContainerEnvironmentId = targetEnvironmentId(container);
 		showInspectModal = true;
 	}
 
 	function browseFiles(container: ContainerInfo) {
 		fileBrowserContainerId = container.id;
 		fileBrowserContainerName = container.name;
+		fileBrowserEnvironmentId = targetEnvironmentId(container);
 		showFileBrowserModal = true;
 	}
 
@@ -1184,8 +1296,9 @@
 		return urlString;
 	}
 
-	function getPortUrl(publicPort: number): string | null {
-		const env = currentEnvDetails;
+	function getPortUrl(publicPort: number, container: ContainerInfo): string | null {
+		const targetId = targetEnvironmentId(container);
+		const env = $environments.find((environment) => environment.id === targetId) ?? currentEnvDetails;
 		if (!env) return null;
 
 		// Priority 1: Use publicIp if configured
@@ -1411,6 +1524,15 @@
 				width="w-44"
 				defaultIcon={Box}
 			/>
+			{#if activeSwarmCluster}
+				<MultiSelectFilter
+					bind:value={nodeFilter}
+					options={nodeFilterOptions}
+					placeholder="All nodes"
+					pluralLabel="nodes"
+					width="w-52"
+				/>
+			{/if}
 			<div class="flex gap-2">
 				{#if $canAccess('containers', 'create')}
 				<Button size="sm" variant="secondary" onclick={() => (showCreateModal = true)}>
@@ -1418,6 +1540,7 @@
 					Create
 				</Button>
 				{/if}
+				{#if !activeSwarmCluster}
 				<CheckUpdatesButton
 					bind:this={checkUpdatesBtn}
 					{envId}
@@ -1473,7 +1596,8 @@
 						{/if}
 					</Button>
 				{/if}
-				{#if $canAccess('containers', 'remove')}
+				{/if}
+				{#if !activeSwarmCluster && $canAccess('containers', 'remove')}
 				<ConfirmPopover
 					open={confirmPrune}
 					action="Prune"
@@ -1517,6 +1641,20 @@
 			</div>
 		</div>
 	</div>
+
+	{#if activeSwarmCluster && swarmNodeIssues.length > 0}
+		<div class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+			<div class="flex items-start gap-2">
+				<AlertTriangle class="mt-0.5 h-3.5 w-3.5 shrink-0" />
+				<div>
+					<p class="font-medium">Container data is incomplete for {swarmNodeIssues.length} Swarm node{swarmNodeIssues.length === 1 ? '' : 's'}.</p>
+					<p class="text-amber-700/80 dark:text-amber-200/80">
+						{swarmNodeIssues.map((issue) => `${issue.nodeName} (${issue.nodeRole === 'manager' ? 'Manager' : 'Worker'}): ${issue.kind === 'unregistered' ? 'no registered Docker endpoint' : 'Docker endpoint unreachable'}`).join(' · ')}
+					</p>
+				</div>
+			</div>
+		</div>
+	{/if}
 
 	<!-- Selection bar - always reserve space to prevent layout shift -->
 	<div class="h-4 shrink-0">
@@ -1676,7 +1814,7 @@
 		<EmptyState
 			icon={Box}
 			title="No containers found"
-			description="Create a new container to get started"
+			description={activeSwarmCluster && swarmNodeIssues.length > 0 ? 'No container endpoint returned data. Check the Swarm node endpoints above.' : 'Create a new container to get started'}
 		/>
 	{:else}
 		<!-- Main content area - changes based on layout mode -->
@@ -1688,7 +1826,7 @@
 			<DataGrid
 				data={filteredContainers}
 				keyField="id"
-				gridId="containers"
+				gridId={activeSwarmCluster ? 'swarmContainers' : 'containers'}
 				loading={loading}
 				selectable
 				bind:selectedKeys={selectedContainers}
@@ -1828,6 +1966,12 @@
 								/>
 							{/if}
 							<span class="text-xs text-muted-foreground truncate" title={container.image}>{container.image}</span>
+						</div>
+					{:else if column.id === 'node'}
+						{@const swarmContainer = container as SwarmContainerInfo}
+						<div class="min-w-0" title={`${swarmContainer.nodeName} (${swarmContainer.nodeRole === 'manager' ? 'Manager' : 'Worker'})`}>
+							<p class="truncate text-xs font-medium">{swarmContainer.nodeName}</p>
+							<p class="text-2xs text-muted-foreground">{swarmContainer.nodeRole === 'manager' ? 'Manager' : 'Worker'}</p>
 						</div>
 					{:else if column.id === 'state'}
 						{@const StateIcon = getStatusIcon(container.state)}
@@ -2003,7 +2147,7 @@
 								{#each displayPorts as port}
 									{@const portParsed = parseCustomUrl(container.labels?.[`dockhand.port.${port.publicPort}.url`])}
 									{@const portUrl = portParsed?.url || null}
-									{@const url = portUrl || (currentEnvDetails ? getPortUrl(port.publicPort) : null)}
+									{@const url = portUrl || getPortUrl(port.publicPort, container)}
 									{#if url}
 										<a
 											href={url}
@@ -2377,7 +2521,7 @@
 									containerId={activeLog.containerId}
 									containerName={activeLog.containerName}
 									visible={true}
-									envId={envId}
+									envId={activeLog.environmentId}
 									fillHeight={true}
 									onClose={() => closeLogs(activeLog.containerId)}
 								/>
@@ -2396,7 +2540,7 @@
 									shell={activeTerminal.shell}
 									user={activeTerminal.user}
 									visible={true}
-									envId={envId}
+									envId={activeTerminal.environmentId}
 									fillHeight={true}
 									onClose={() => closeTerminal(activeTerminal.containerId)}
 								/>
@@ -2417,7 +2561,7 @@
 						containerId={activeLog.containerId}
 						containerName={activeLog.containerName}
 						visible={true}
-						envId={envId}
+						envId={activeLog.environmentId}
 						onClose={() => closeLogs(activeLog.containerId)}
 					/>
 				{/if}
@@ -2433,7 +2577,7 @@
 						shell={activeTerminal.shell}
 						user={activeTerminal.user}
 						visible={true}
-						envId={envId}
+						envId={activeTerminal.environmentId}
 						onClose={() => closeTerminal(activeTerminal.containerId)}
 					/>
 				{/if}
@@ -2451,6 +2595,7 @@
 <EditContainerModal
 	bind:open={showEditModal}
 	containerId={editContainerId}
+	environmentId={editContainerEnvironmentId}
 	onClose={() => (showEditModal = false)}
 	onSuccess={fetchContainers}
 />
@@ -2459,6 +2604,7 @@
 	bind:open={showInspectModal}
 	containerId={inspectContainerId}
 	containerName={inspectContainerName}
+	environmentId={inspectContainerEnvironmentId}
 	onRename={(newName) => {
 		// Update the container name in the local state
 		inspectContainerName = newName;
@@ -2476,7 +2622,7 @@
 	bind:open={showFileBrowserModal}
 	containerId={fileBrowserContainerId}
 	containerName={fileBrowserContainerName}
-	envId={envId ?? undefined}
+	envId={fileBrowserEnvironmentId ?? undefined}
 	onclose={() => showFileBrowserModal = false}
 />
 
@@ -2544,4 +2690,3 @@
 	}
 
 </style>
-

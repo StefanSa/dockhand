@@ -26,6 +26,7 @@
 		open: boolean;
 		containerId: string;
 		containerName?: string;
+		environmentId?: number | null;
 		onRename?: (newName: string) => void;
 		// Lifecycle handlers from the parent (#461). Non-destructive actions
 		// return a promise so the modal can refresh inspect data afterwards;
@@ -37,7 +38,8 @@
 		onEdit?: (id: string) => void;
 	}
 
-	let { open = $bindable(), containerId, containerName, onRename, onStart, onStop, onRestart, onRemove, onEdit }: Props = $props();
+	let { open = $bindable(), containerId, containerName, environmentId, onRename, onStart, onStop, onRestart, onRemove, onEdit }: Props = $props();
+	const effectiveEnvironmentId = $derived(environmentId ?? $currentEnvironment?.id ?? null);
 
 	// Confirmation-popover open state for the destructive actions in the header.
 	let confirmStopOpen = $state(false);
@@ -220,7 +222,7 @@
 	async function fetchNetworks() {
 		networksLoading = true;
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam('/api/networks', envId));
 			if (response.ok) {
 				availableNetworks = await response.json();
@@ -236,7 +238,7 @@
 		if (!selectedNetwork || !containerId) return;
 		networkConnecting = true;
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/networks/${selectedNetwork}/connect`, envId), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -261,7 +263,7 @@
 	async function disconnectFromNetwork(networkId: string, networkName: string) {
 		networkDisconnecting = networkName;
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/networks/${networkId}/disconnect`, envId), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -282,7 +284,7 @@
 	}
 
 	// Current environment details for port URL generation
-	const currentEnvDetails = $derived($environments.find(e => e.id === $currentEnvironment?.id) ?? null);
+	const currentEnvDetails = $derived($environments.find(e => e.id === effectiveEnvironmentId) ?? null);
 
 	function extractHostFromUrl(urlString: string): string | null {
 		if (!urlString) return null;
@@ -341,7 +343,7 @@
 		}
 		renaming = true;
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/containers/${containerId}/rename`, envId), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -431,7 +433,7 @@
 		loading = true;
 		error = '';
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/containers/${containerId}/inspect`, envId));
 			if (!response.ok) {
 				throw new Error('Failed to fetch container details');
@@ -461,7 +463,7 @@
 	async function fetchStats() {
 		if (!containerId || !containerData?.State?.Running) return;
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/containers/${containerId}/stats`, envId));
 			if (response.ok) {
 				const stats = await response.json();
@@ -503,7 +505,7 @@
 		}
 		processesError = '';
 		try {
-			const envId = $currentEnvironment?.id ?? null;
+			const envId = effectiveEnvironmentId;
 			const response = await fetch(appendEnvParam(`/api/containers/${containerId}/top`, envId));
 			if (response.ok) {
 				const data = await response.json();
@@ -687,8 +689,8 @@
 						<Pencil class="w-3 h-3 text-muted-foreground hover:text-foreground" />
 					</button>
 				{/if}
-				{#if $currentEnvironment}
-					<span class="font-semibold">on <span class="text-amber-600 dark:text-amber-400">{$currentEnvironment.name}</span></span>
+				{#if currentEnvDetails}
+					<span class="font-semibold">on <span class="text-amber-600 dark:text-amber-400">{currentEnvDetails.name}</span></span>
 				{/if}
 				{@const composeStack = containerData?.Config?.Labels?.['com.docker.compose.project']}
 				{#if composeStack && !loading}
@@ -1080,7 +1082,7 @@
 							containerId={containerId}
 							containerName={containerName || containerId.slice(0, 12)}
 							visible={showLogs}
-							envId={$currentEnvironment?.id ?? null}
+							envId={effectiveEnvironmentId}
 							fillHeight={true}
 							showCloseButton={false}
 							onClose={() => showLogs = false}
@@ -1387,7 +1389,7 @@
 						{#if containerData.State?.Running && !containerData.State?.Paused}
 							<FileBrowserPanel
 								containerId={containerId}
-								envId={$currentEnvironment?.id ?? undefined}
+								envId={effectiveEnvironmentId ?? undefined}
 							/>
 						{:else if containerData.State?.Paused}
 							<div class="flex items-center gap-2 text-sm text-muted-foreground py-8 justify-center">
@@ -1893,4 +1895,3 @@
 		</Dialog.Footer>
 	</Dialog.Content>
 </Dialog.Root>
-

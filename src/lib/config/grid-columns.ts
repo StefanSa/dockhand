@@ -20,6 +20,12 @@ export const containerColumns: ColumnConfig[] = [
 	{ id: 'actions', label: '', fixed: 'end', width: 200, minWidth: 150, resizable: true }
 ];
 
+export const swarmContainerColumns: ColumnConfig[] = [
+	...containerColumns.slice(0, 2),
+	{ id: 'node', label: 'Node', sortable: true, sortField: 'node', width: 150, minWidth: 100, grow: true },
+	...containerColumns.slice(2)
+];
+
 // Image grid columns
 export const imageColumns: ColumnConfig[] = [
 	{ id: 'select', label: '', fixed: 'start', width: 32, resizable: false },
@@ -193,6 +199,7 @@ export const vulnerabilityColumns: ColumnConfig[] = [
 // Map of grid ID to column definitions
 export const gridColumnConfigs: Record<GridId, ColumnConfig[]> = {
 	containers: containerColumns,
+	swarmContainers: swarmContainerColumns,
 	images: imageColumns,
 	imageTags: imageTagColumns,
 	networks: networkColumns,
