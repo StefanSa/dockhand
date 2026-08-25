@@ -87,3 +87,12 @@ export async function performSwarmStackAction(
   if (action.type === "deploy") validateSwarmStackCompose(action.compose);
   return execute({ ...action, name });
 }
+
+export async function persistSwarmStackAfterDeploy<T>(
+  deploy: () => Promise<T>,
+  persist: () => Promise<void>,
+): Promise<T> {
+  const result = await deploy();
+  await persist();
+  return result;
+}

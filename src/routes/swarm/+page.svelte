@@ -74,6 +74,8 @@
 	let stackCompose = $state('');
 	let stackPending = $state(false);
 	let stackError = $state<string | null>(null);
+	let stackExternal = $state(false);
+	let stackEditorReady = $state(false);
 	let removeStackDialogOpen = $state(false);
 	let removeStackName = $state('');
 	let removeStackFiles = $state(false);
@@ -663,6 +665,8 @@
 
 	function openCreateStackDialog(): void {
 		stackEditing = false;
+		stackExternal = false;
+		stackEditorReady = true;
 		stackName = '';
 		stackCompose = 'services:\n  web:\n    image: nginx:alpine\n    deploy:\n      replicas: 1\n';
 		stackError = null;
@@ -672,26 +676,31 @@
 	async function openEditStackDialog(stack: SwarmStackSummary): Promise<void> {
 		if (!environmentId || stackPending) return;
 		stackEditing = true;
+		stackExternal = !stack.managed;
+		stackEditorReady = false;
 		stackName = stack.name;
 		stackCompose = '';
 		stackError = null;
-		stackDialogOpen = true;
 		stackPending = true;
 		try {
 			const response = await fetch(`/api/swarm/stacks/${encodeURIComponent(stack.name)}?env=${environmentId}`);
 			const body = await response.json().catch(() => ({}));
 			if (!response.ok) {
 				if (response.status === 404) {
-					stackError = 'This stack was discovered from Swarm labels, but Dockhand has no stored file. Paste the complete stack file to adopt and redeploy it.';
+					stackExternal = true;
+					stackEditorReady = true;
 					return;
 				}
 				throw new Error(body.error || 'Failed to load Swarm stack file');
 			}
 			stackCompose = body.compose;
+			stackExternal = body.managed !== true;
+			stackEditorReady = true;
 		} catch (loadFailure) {
 			stackError = loadFailure instanceof Error ? loadFailure.message : 'Failed to load Swarm stack file';
 		} finally {
 			stackPending = false;
+			stackDialogOpen = true;
 		}
 	}
 
@@ -699,10 +708,15 @@
 		if (stackPending) return;
 		stackDialogOpen = false;
 		stackError = null;
+		stackCompose = '';
+		stackName = '';
+		stackExternal = false;
+		stackEditorReady = false;
 	}
 
 	async function deployStack(): Promise<void> {
-		if (!environmentId || stackPending) return;
+		if (!environmentId || stackPending || !stackEditorReady) return;
+		const adopting = stackExternal;
 		stackPending = true;
 		stackError = null;
 		try {
@@ -714,7 +728,7 @@
 			const body = await response.json().catch(() => ({}));
 			if (!response.ok) throw new Error(body.error || 'Failed to deploy Swarm stack');
 			stackDialogOpen = false;
-			toast.success(`Swarm stack ${body.name} deployed`);
+			toast.success(adopting ? `Swarm stack ${body.name} adopted and redeployed` : `Swarm stack ${body.name} deployed`);
 			await load(true);
 			activeTab = 'stacks';
 		} catch (deployFailure) {
@@ -1001,7 +1015,7 @@
 						{#if Object.keys(selectedNode.labels).length}<div><h3 class="mb-2 text-sm font-medium">Labels</h3><div class="flex flex-wrap gap-1">{#each Object.entries(selectedNode.labels) as [key, value] (key)}<Badge variant="outline" class="font-mono">{key}={value}</Badge>{/each}</div></div>{/if}
 					</Card.Content></Card.Root>
 				{:else if selectedStack}
-					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedStack.name}</Card.Title><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={swarmStatusPresentation(service.healthState).variant} class={swarmStatusPresentation(service.healthState).className}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
+					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><Card.Title>{selectedStack.name}</Card.Title><Badge variant="outline" class={selectedStack.managed ? '' : 'border-amber-600/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'}>{selectedStack.managed ? 'Managed by Dockhand' : 'External / no stored file'}</Badge></div><Card.Description>Swarm stack · {selectedStack.runningTasks} / {selectedStack.desiredTasks ?? '—'} running</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex gap-2"><Button variant="outline" size="sm" onclick={() => openEditStackDialog(selectedStack)}><Pencil class="h-4 w-4" /> Edit / Redeploy</Button><Button variant="destructive" size="sm" onclick={() => openRemoveStackDialog(selectedStack)}><Trash2 class="h-4 w-4" /> Remove</Button></div>{/if}</div></Card.Header><Card.Content><h3 class="mb-2 text-sm font-medium">Services ({selectedStack.services.length})</h3><div class="flex flex-wrap gap-1">{#each selectedStack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant={swarmStatusPresentation(service.healthState).variant} class={swarmStatusPresentation(service.healthState).className}>{service.name} · {service.runningTasks}/{service.desiredTasks ?? '—'}</Badge></a>{/each}</div></Card.Content></Card.Root>
 				{:else if selectedConfig}
 					<Card.Root><Card.Header><div class="flex flex-wrap items-start justify-between gap-3"><div><Card.Title>{selectedConfig.name}</Card.Title><Card.Description class="font-mono break-all">{selectedConfig.id}</Card.Description></div>{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}<div class="flex flex-wrap gap-2"><Button size="sm" variant="outline" onclick={() => openMetadataDialog('config', selectedConfig)}><Pencil class="h-4 w-4" /> Edit labels</Button><Button size="sm" variant="outline" onclick={() => openReplaceConfigDialog(selectedConfig)}><Pencil class="h-4 w-4" /> Edit Config</Button><Button size="sm" variant="destructive" onclick={() => openDeleteResourceDialog('config', selectedConfig)} disabled={selectedConfig.services.length > 0}><Trash2 class="h-4 w-4" /> Delete</Button></div>{/if}</div></Card.Header><Card.Content class="space-y-5">
 						<div class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-4"><div><span class="text-muted-foreground">Created</span><p>{formatDate(selectedConfig.createdAt)}</p></div><div><span class="text-muted-foreground">Updated</span><p>{formatDate(selectedConfig.updatedAt)}</p></div><div><span class="text-muted-foreground">Version</span><p>{selectedConfig.version}</p></div><div><span class="text-muted-foreground">Stacks</span><p>{#each selectedConfig.stackNames as stack, index (stack)}{#if index}, {/if}<a class="font-medium text-primary hover:underline" href={detailHref('stack', stack)}>{stack}</a>{:else}None derived{/each}</p></div></div>
@@ -1133,7 +1147,7 @@
 						<Table.Body>
 							{#each data.stacks as stack (stack.name)}
 								<Table.Row>
-									<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('stack', stack.name)}>{stack.name}</a><div class="text-xs text-muted-foreground">Swarm stack</div></Table.Cell>
+									<Table.Cell><a class="font-medium text-primary hover:underline" href={detailHref('stack', stack.name)}>{stack.name}</a><div class="mt-1"><Badge variant="outline" class={stack.managed ? '' : 'border-amber-600/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'}>{stack.managed ? 'Managed by Dockhand' : 'External / no stored file'}</Badge></div></Table.Cell>
 									<Table.Cell><div class="flex flex-wrap gap-1">{#each stack.services as service (service.id)}<a href={detailHref('service', service.id)}><Badge variant="outline">{service.name}</Badge></a>{/each}</div></Table.Cell>
 									<Table.Cell>{stack.runningTasks} / {stack.desiredTasks ?? '—'}</Table.Cell>
 									{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
@@ -1483,11 +1497,18 @@
 <Dialog.Root bind:open={stackDialogOpen} onOpenChange={(open) => { if (!open) closeStackDialog(); }}>
 	<Dialog.Content class="flex h-[min(85vh,48rem)] max-w-4xl flex-col">
 		<Dialog.Header>
-			<Dialog.Title>{stackEditing ? 'Edit and redeploy Swarm stack' : 'Deploy Swarm stack'}</Dialog.Title>
+			<Dialog.Title>{stackExternal ? 'Adopt external Swarm stack' : stackEditing ? 'Edit and redeploy Swarm stack' : 'Deploy Swarm stack'}</Dialog.Title>
 			<Dialog.Description>
-				Uses native <code>docker stack deploy</code> semantics. The stored file is separate from normal Docker Compose projects.
+				{stackExternal ? 'Paste the complete Stack file. Dockhand stores it only after a successful redeploy.' : 'Uses native docker stack deploy semantics. The stored file is separate from normal Docker Compose projects.'}
 			</Dialog.Description>
 		</Dialog.Header>
+		{#if stackExternal}
+			<Alert.Root class="border-amber-600/30 bg-amber-500/10">
+				<Layers class="h-4 w-4 text-amber-700 dark:text-amber-400" />
+				<Alert.Title>External / no stored file</Alert.Title>
+				<Alert.Description>This live stack was discovered from Docker service labels. Paste its full Stack file, review it, then choose Adopt & redeploy to make Dockhand its file source of truth.</Alert.Description>
+			</Alert.Root>
+		{/if}
 		<div class="space-y-2">
 			<Label for="swarm-stack-name">Stack name</Label>
 			<Input id="swarm-stack-name" bind:value={stackName} disabled={stackPending || stackEditing} placeholder="my-stack" />
@@ -1495,7 +1516,7 @@
 		<div class="mt-3 min-h-0 flex-1 space-y-2">
 			<Label>Compose / Stack file</Label>
 			<div class="h-[calc(100%-1.75rem)] overflow-hidden rounded-md border">
-				<CodeEditor value={stackCompose} language="yaml" readonly={stackPending} onchange={(value) => stackCompose = value} class="h-full" />
+				<CodeEditor value={stackCompose} language="yaml" readonly={stackPending || !stackEditorReady} onchange={(value) => stackCompose = value} class="h-full" />
 			</div>
 		</div>
 		{#if stackError}
@@ -1506,9 +1527,9 @@
 		{/if}
 		<Dialog.Footer>
 			<Button variant="outline" onclick={closeStackDialog} disabled={stackPending}>Cancel</Button>
-			<Button onclick={deployStack} disabled={stackPending || !stackName.trim() || !stackCompose.trim()}>
+			<Button onclick={deployStack} disabled={stackPending || !stackEditorReady || !stackName.trim() || !stackCompose.trim()}>
 				{#if stackPending}<Loader2 class="h-4 w-4 animate-spin" />{/if}
-				{stackEditing ? 'Save and redeploy' : 'Deploy stack'}
+				{stackExternal ? 'Adopt & redeploy' : stackEditing ? 'Save and redeploy' : 'Deploy stack'}
 			</Button>
 		</Dialog.Footer>
 	</Dialog.Content>

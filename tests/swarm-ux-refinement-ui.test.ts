@@ -38,6 +38,19 @@ describe('Swarm UX refinement UI gates', () => {
 		assert.match(swarmPage, /disabled=\{resourcePending \|\| Boolean\(usage\.stackName\)\}/);
 	});
 
+	it('keeps external Swarm stack adoption editable and side-effect free until redeploy', () => {
+		assert.match(swarmPage, /External \/ no stored file/);
+		assert.match(swarmPage, /stackExternal = !stack\.managed/);
+		assert.match(swarmPage, /response\.status === 404[\s\S]*?stackEditorReady = true/);
+		assert.match(swarmPage, /finally \{[\s\S]*?stackPending = false;[\s\S]*?stackDialogOpen = true/);
+		assert.match(swarmPage, /readonly=\{stackPending \|\| !stackEditorReady\}/);
+		assert.match(swarmPage, /Adopt & redeploy/);
+		assert.match(swarmPage, /stores it only after a successful redeploy/);
+		const closeDialog = swarmPage.match(/function closeStackDialog\(\): void \{[\s\S]*?\n\t\}/)?.[0] ?? '';
+		assert.doesNotMatch(closeDialog, /fetch\(|\/api\//);
+		assert.match(closeDialog, /stackCompose = ''/);
+	});
+
 	it('offers the complete ServiceUpdate editor for replicated and global services', () => {
 		assert.match(swarmPage, /openServiceEditor\(service/);
 		assert.match(serviceEditor, /action: 'update'/);

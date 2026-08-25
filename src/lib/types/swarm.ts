@@ -224,6 +224,7 @@ export interface SwarmStackSummary {
 	services: SwarmServiceSummary[];
 	runningTasks: number;
 	desiredTasks: number | null;
+	managed: boolean;
 }
 
 export interface SwarmClusterSummary {
@@ -713,9 +714,20 @@ export function mapSwarmStacks(services: SwarmServiceSummary[]): SwarmStackSumma
 			runningTasks: stackServices.reduce((total, service) => total + service.runningTasks, 0),
 			desiredTasks: stackServices.some((service) => service.desiredTasks === null)
 				? null
-				: stackServices.reduce((total, service) => total + (service.desiredTasks ?? 0), 0)
+				: stackServices.reduce((total, service) => total + (service.desiredTasks ?? 0), 0),
+			managed: false
 		}))
 		.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function markManagedSwarmStacks(
+	stacks: SwarmStackSummary[],
+	hasStoredFile: (name: string) => Promise<boolean>
+): Promise<SwarmStackSummary[]> {
+	return Promise.all(stacks.map(async (stack) => ({
+		...stack,
+		managed: await hasStoredFile(stack.name)
+	})));
 }
 
 export function mapSwarmCluster(

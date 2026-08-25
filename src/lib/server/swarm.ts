@@ -1,6 +1,7 @@
 import { dockerFetch, dockerJsonRequest, getDockerInfo, getDockerVersion } from './docker';
 import {
 	loadSwarmReadModel,
+	markManagedSwarmStacks,
 	mapSwarmConfig,
 	mapSwarmSecret,
 	parseSwarmCapability,
@@ -34,6 +35,7 @@ import {
 	type SwarmResourceLabelUpdateResult,
 	type SwarmResourceKind
 } from './swarm-resource';
+import { hasStoredSwarmStackFile } from './swarm-stack';
 
 const CAPABILITY_CACHE_TTL_MS = 30_000;
 const UNKNOWN_CACHE_TTL_MS = 5_000;
@@ -96,10 +98,15 @@ export async function getSwarmReadModel(environmentId: number, refreshCapability
 	// Workers can report their local role through /info, but cluster object
 	// endpoints are manager-only. loadSwarmReadModel returns before requesting
 	// them and never attempts to route through RemoteManagers.
-	return loadSwarmReadModel(
+	const model = await loadSwarmReadModel(
 		capability,
 		(path) => dockerJsonRequest<unknown>(path, {}, environmentId)
 	);
+	model.stacks = await markManagedSwarmStacks(
+		model.stacks,
+		(name) => hasStoredSwarmStackFile(environmentId, name)
+	);
+	return model;
 }
 
 export interface SwarmResourceList {

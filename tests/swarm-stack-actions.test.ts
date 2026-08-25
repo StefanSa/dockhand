@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   performSwarmStackAction,
+  persistSwarmStackAfterDeploy,
   SwarmStackActionError,
   validateSwarmStackCompose,
 } from "../src/lib/server/swarm-stack-action";
@@ -15,6 +16,36 @@ const manager: SwarmCapability = {
 };
 
 describe("Swarm stack actions", () => {
+  it("persists an adopted definition only after Docker redeploy succeeds", async () => {
+    const events: string[] = [];
+    const output = await persistSwarmStackAfterDeploy(
+      async () => {
+        events.push("redeploy");
+        return "updated";
+      },
+      async () => {
+        events.push("persist");
+      },
+    );
+    assert.equal(output, "updated");
+    assert.deepEqual(events, ["redeploy", "persist"]);
+
+    events.length = 0;
+    await assert.rejects(
+      persistSwarmStackAfterDeploy(
+        async () => {
+          events.push("redeploy");
+          throw new Error("deploy failed");
+        },
+        async () => {
+          events.push("persist");
+        },
+      ),
+      /deploy failed/,
+    );
+    assert.deepEqual(events, ["redeploy"]);
+  });
+
   it("deploys a validated stack through the supplied executor", async () => {
     let received: unknown;
     const result = await performSwarmStackAction(

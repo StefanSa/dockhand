@@ -26,6 +26,7 @@ import {
 import type { SwarmCapability } from "$lib/types/swarm";
 import {
   performSwarmStackAction,
+  persistSwarmStackAfterDeploy,
   SwarmStackActionError,
   validateSwarmStackName,
   type SwarmStackActionResult,
@@ -33,6 +34,7 @@ import {
 
 export {
   performSwarmStackAction,
+  persistSwarmStackAfterDeploy,
   requireSwarmStackManager,
   SwarmStackActionError,
   validateSwarmStackCompose,
@@ -190,42 +192,56 @@ export async function deploySwarmStack(
         );
       }
 
-      const stackDir = await getStackDir(action.name, environmentId);
-      const composePath = join(stackDir, "compose.yaml");
-      const saved = await saveStackComposeFile(
-        action.name,
-        action.compose,
-        false,
-        environmentId,
-        {
-          composePath,
-          sourceType: "swarm",
-        },
-      );
-      if (!saved.success)
-        throw new SwarmStackActionError(
-          saved.error || "Failed to save stack file",
-          500,
-        );
+      const dataDir = resolve(process.env.DATA_DIR || "./data");
+      const tempRoot = join(dataDir, "tmp");
+      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+      const definitionDir = mkdtempSync(join(tempRoot, "swarm-definition-"));
+      const transientComposePath = join(definitionDir, "compose.yaml");
+      writeFileSync(transientComposePath, action.compose, { mode: 0o600 });
 
-      await runDockerStackCli(environmentId, [
-        "stack",
-        "config",
-        "--compose-file",
-        composePath,
-      ]);
-      const output = await runDockerStackCli(environmentId, [
-        "stack",
-        "deploy",
-        "--detach=false",
-        "--prune",
-        "--resolve-image",
-        "changed",
-        "--with-registry-auth",
-        "--compose-file",
-        composePath,
-        action.name,
-      ]);
+      let output: string;
+      try {
+        output = await persistSwarmStackAfterDeploy(
+          async () => {
+            await runDockerStackCli(environmentId, [
+              "stack",
+              "config",
+              "--compose-file",
+              transientComposePath,
+            ]);
+            return runDockerStackCli(environmentId, [
+              "stack",
+              "deploy",
+              "--detach=false",
+              "--prune",
+              "--resolve-image",
+              "changed",
+              "--with-registry-auth",
+              "--compose-file",
+              transientComposePath,
+              action.name,
+            ]);
+          },
+          async () => {
+            const stackDir = await getStackDir(action.name, environmentId);
+            const composePath = join(stackDir, "compose.yaml");
+            const saved = await saveStackComposeFile(
+              action.name,
+              action.compose,
+              false,
+              environmentId,
+              { composePath, sourceType: "swarm" },
+            );
+            if (!saved.success)
+              throw new SwarmStackActionError(
+                saved.error || "Failed to save stack file",
+                500,
+              );
+          },
+        );
+      } finally {
+        rmSync(definitionDir, { recursive: true, force: true });
+      }
       return {
         action: "deploy",
         name: action.name,
@@ -291,11 +307,22 @@ export async function getSwarmStackCompose(
     );
   }
   const result = await getStackComposeFile(stackName, environmentId);
-  if (!result.success || !result.content) {
+  if (!result.success || !result.content?.trim()) {
     throw new SwarmStackActionError(
       result.error || "Stored Swarm stack file is unavailable",
       404,
     );
   }
   return { compose: result.content, managed: true };
+}
+
+export async function hasStoredSwarmStackFile(
+  environmentId: number,
+  name: string,
+): Promise<boolean> {
+  const stackName = validateSwarmStackName(name);
+  const source = await getStackSource(stackName, environmentId);
+  if (!source || source.sourceType !== "swarm") return false;
+  const result = await getStackComposeFile(stackName, environmentId);
+  return Boolean(result.success && result.content?.trim());
 }

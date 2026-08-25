@@ -8,6 +8,7 @@ import {
 	mapSwarmService,
 	mapSwarmStacks,
 	mapSwarmTask,
+	markManagedSwarmStacks,
 	loadSwarmReadModel,
 	type SwarmCapability
 } from '../src/lib/types/swarm';
@@ -145,6 +146,24 @@ describe('Swarm read-only response mapping', () => {
 		assert.deepEqual(stacks[0].services.map((service) => service.name), ['demo_web', 'demo_worker']);
 		assert.equal(stacks[0].runningTasks, 3);
 		assert.equal(stacks[0].desiredTasks, 3);
+		assert.equal(stacks[0].managed, false);
+	});
+
+	it('marks only live stacks with an environment-scoped stored file as managed', async () => {
+		const liveStacks = mapSwarmStacks([
+			mapSwarmService({ ID: 'one', Spec: { Name: 'demo_web', Labels: { 'com.docker.stack.namespace': 'demo' }, Mode: { Replicated: { Replicas: 1 } } } })
+		]);
+		const probes: string[] = [];
+		const managed = await markManagedSwarmStacks(liveStacks, async (name) => {
+			probes.push(name);
+			return name === 'demo';
+		});
+
+		assert.deepEqual(probes, ['demo']);
+		assert.equal(managed[0].managed, true);
+		assert.deepEqual(await markManagedSwarmStacks([], async () => {
+			throw new Error('stale stored files must not be probed into the live list');
+		}), []);
 	});
 
 	it('maps config and secret metadata with safely derived service usage', () => {
