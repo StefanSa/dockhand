@@ -89,6 +89,7 @@ import { encrypt, decrypt, decryptStrict, isEncrypted } from './encryption.js';
 import { parseEnvInterpolation } from './env-interpolation';
 import { parseInjectedSecretKeys, serializeInjectedSecretKeys } from './stack-secret-keys';
 import { invalidateVulnerabilitiesCache } from './vulnerabilities-cache';
+import { rewriteEnvironmentPath, type EnvironmentPathRewrite } from './environment-rename';
 
 // Re-export for backwards compatibility
 export { db, isPostgres, isSqlite };
@@ -183,7 +184,7 @@ export async function createEnvironment(env: Omit<Environment, 'id' | 'createdAt
 	};
 }
 
-export async function updateEnvironment(id: number, env: Partial<Environment>): Promise<Environment | undefined> {
+function environmentUpdateData(env: Partial<Environment>): Record<string, any> {
 	const updateData: Record<string, any> = { updatedAt: new Date().toISOString() };
 
 	if (env.name !== undefined) updateData.name = env.name;
@@ -202,9 +203,42 @@ export async function updateEnvironment(id: number, env: Partial<Environment>): 
 	if (env.labels !== undefined) updateData.labels = env.labels;
 	if (env.connectionType !== undefined) updateData.connectionType = env.connectionType;
 	if (env.hawserToken !== undefined) updateData.hawserToken = encrypt(env.hawserToken);
+	return updateData;
+}
 
+export async function updateEnvironment(id: number, env: Partial<Environment>): Promise<Environment | undefined> {
+	const updateData = environmentUpdateData(env);
 	await db.update(environments).set(updateData).where(eq(environments.id, id));
 	return getEnvironment(id);
+}
+
+export async function updateEnvironmentWithStackSourcePaths(
+	id: number,
+	env: Partial<Environment>,
+	rewrites: EnvironmentPathRewrite[]
+): Promise<Environment | undefined> {
+	const updateData = environmentUpdateData(env);
+	const updated = await db.transaction(async (tx) => {
+		await tx.update(environments).set(updateData).where(eq(environments.id, id));
+		const rows = await tx.select().from(environments).where(eq(environments.id, id));
+		if (!rows[0]) throw new Error('Environment not found');
+		const sources = await tx.select().from(stackSources)
+			.where(eq(stackSources.environmentId, id));
+		for (const source of sources) {
+			const composePath = rewriteEnvironmentPath(source.composePath, rewrites);
+			const envPath = rewriteEnvironmentPath(source.envPath, rewrites);
+			if (composePath === source.composePath && envPath === source.envPath) continue;
+			await tx.update(stackSources)
+				.set({ composePath, envPath, updatedAt: new Date().toISOString() })
+				.where(eq(stackSources.id, source.id));
+		}
+		return rows[0];
+	});
+	return {
+		...updated,
+		tlsKey: decrypt(updated.tlsKey),
+		hawserToken: decrypt(updated.hawserToken)
+	};
 }
 
 export async function deleteEnvironment(id: number): Promise<boolean> {

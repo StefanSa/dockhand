@@ -1,8 +1,8 @@
 import { json } from '@sveltejs/kit';
 import { join } from 'path';
-import { existsSync, rmSync, renameSync } from 'fs';
+import { existsSync, rmSync } from 'fs';
 import type { RequestHandler } from './$types';
-import { getEnvironment, updateEnvironment, deleteEnvironment, getEnvironmentPublicIps, setEnvironmentPublicIp, deleteEnvironmentPublicIp, deleteEnvUpdateCheckSettings, deleteImagePruneSettings, getGitStacksForEnvironmentOnly, deleteGitStack, getBackupConfigs } from '$lib/server/db';
+import { getEnvironment, updateEnvironment, updateEnvironmentWithStackSourcePaths, deleteEnvironment, getEnvironmentPublicIps, setEnvironmentPublicIp, deleteEnvironmentPublicIp, deleteEnvUpdateCheckSettings, deleteImagePruneSettings, getGitStacksForEnvironmentOnly, deleteGitStack, getBackupConfigs } from '$lib/server/db';
 import { clearDockerClientCache } from '$lib/server/docker';
 import { deleteGitStackFiles, getGitReposDir } from '$lib/server/git';
 import { getStacksDir } from '$lib/server/stacks';
@@ -17,6 +17,7 @@ import { unregisterSchedule } from '$lib/server/scheduler';
 import { closeEdgeConnection } from '$lib/server/hawser';
 import { computeAuditDiff } from '$lib/utils/diff';
 import { deleteEnvironmentIcon } from '$lib/server/env-icons';
+import { renameEnvironmentDirectories, type EnvironmentPathRewrite } from '$lib/server/environment-rename';
 
 /**
  * @openapi
@@ -111,6 +112,7 @@ export const PUT: RequestHandler = async (event) => {
 		// in-app editor) and ALL git stacks clone to git-repos/<envName>/
 		// regardless of where they ultimately deploy — so the rename matters
 		// locally for every env type.
+		let pathRewrites: EnvironmentPathRewrite[] = [];
 		if (isRename) {
 			const stacksDir = getStacksDir();
 			const gitReposDir = getGitReposDir();
@@ -132,19 +134,10 @@ export const PUT: RequestHandler = async (event) => {
 				}, { status: 409 });
 			}
 
-			try {
-				if (existsSync(oldStacks)) renameSync(oldStacks, newStacks);
-				if (existsSync(oldRepos)) renameSync(oldRepos, newRepos);
-			} catch (err: any) {
-				// Best-effort rollback if the second rename failed after the first
-				// succeeded. Avoids leaving the filesystem in a split state.
-				try { if (existsSync(newStacks) && !existsSync(oldStacks)) renameSync(newStacks, oldStacks); } catch {}
-				try { if (existsSync(newRepos) && !existsSync(oldRepos)) renameSync(newRepos, oldRepos); } catch {}
-				const code = err?.code === 'EXDEV'
-					? 'EXDEV: stacks dir is on a different filesystem from the rename target. Move it back to the same filesystem to rename this environment.'
-					: (err?.message || 'Rename failed');
-				return json({ error: code }, { status: 409 });
-			}
+			pathRewrites = [
+				{ from: oldStacks, to: newStacks },
+				{ from: oldRepos, to: newRepos }
+			];
 		}
 
 		// Clear cached Docker client before updating
@@ -155,7 +148,7 @@ export const PUT: RequestHandler = async (event) => {
 			? serializeLabels(Array.isArray(data.labels) ? data.labels.slice(0, MAX_LABELS) : [])
 			: undefined;
 
-		const env = await updateEnvironment(id, {
+		const updateData = {
 			name: data.name,
 			host: data.host,
 			port: data.port,
@@ -172,7 +165,22 @@ export const PUT: RequestHandler = async (event) => {
 			labels: labels,
 			connectionType: data.connectionType,
 			hawserToken: data.hawserToken
-		});
+		};
+		let env;
+		try {
+			env = isRename
+				? await renameEnvironmentDirectories(pathRewrites, async () => {
+					const updated = await updateEnvironmentWithStackSourcePaths(id, updateData, pathRewrites);
+					if (!updated) throw new Error('Environment not found');
+					return updated;
+				})
+				: await updateEnvironment(id, updateData);
+		} catch (err: any) {
+			const code = err?.code === 'EXDEV'
+				? 'EXDEV: stacks dir is on a different filesystem from the rename target. Move it back to the same filesystem to rename this environment.'
+				: (err?.message || 'Rename failed');
+			return json({ error: code }, { status: isRename ? 409 : 500 });
+		}
 
 		if (!env) {
 			return json({ error: 'Environment not found' }, { status: 404 });
