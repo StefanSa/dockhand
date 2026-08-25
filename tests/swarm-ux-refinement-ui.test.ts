@@ -18,6 +18,8 @@ describe('Swarm UX refinement UI gates', () => {
 		assert.match(swarmPage, /aria-label={`Scale \$\{service\.name\} up`}/);
 		assert.match(swarmPage, /Pending target/);
 		assert.match(swarmPage, /Reconciling/);
+		assert.match(swarmPage, /serviceTaskError\(service\.id\)/);
+		assert.match(swarmPage, /serviceTaskError\(selectedService\.id\)/);
 	});
 
 	it('explains global mode and does not make it scaleable', () => {
@@ -46,10 +48,16 @@ describe('Swarm UX refinement UI gates', () => {
 		]) assert.match(serviceEditor, new RegExp(label));
 		assert.match(serviceEditor, /serviceMode === 'replicated'/);
 		assert.match(serviceEditor, /bind:value=\{serviceMode\}/);
-		assert.match(serviceEditor, /Search networks/);
+		assert.match(serviceEditor, /Docker Engine cannot change a service mode through ServiceUpdate/);
+		assert.match(serviceEditor, /Read-only/);
+		assert.match(serviceEditor, /<Command\.Input placeholder="Search networks\.\.\."/);
 		assert.match(serviceEditor, /Aliases for/);
-		assert.match(serviceEditor, /Search Configs/);
-		assert.match(serviceEditor, /Search Secrets/);
+		assert.match(serviceEditor, /<Command\.Input placeholder="Search Configs\.\.\."/);
+		assert.match(serviceEditor, /<Command\.Input placeholder="Search Secrets\.\.\."/);
+		assert.match(serviceEditor, /Assigned networks/);
+		assert.match(serviceEditor, /Assigned Configs/);
+		assert.match(serviceEditor, /Assigned Secrets/);
+		assert.doesNotMatch(serviceEditor, /toggleNetwork|toggleResource/);
 		assert.doesNotMatch(serviceEditor, /secret\.data|secretValue|Spec\.Data/);
 	});
 
@@ -77,6 +85,8 @@ describe('Swarm UX refinement UI gates', () => {
 		assert.match(swarmPage, /href=\{detailHref\('node', task\.nodeId\)\}/);
 		assert.match(swarmPage, /href=\{detailHref\('service', selectedTaskService\.id\)\}/);
 		assert.match(swarmPage, /href=\{detailHref\('node', selectedTaskNode\.id\)\}/);
+		assert.match(swarmPage, /Networks \(\{selectedService\.networks\.length\}\)/);
+		assert.match(swarmPage, /serviceNetworkName\(network\.target\)/);
 	});
 
 	it('binds capability warnings and Swarm navigation to the active environment', () => {

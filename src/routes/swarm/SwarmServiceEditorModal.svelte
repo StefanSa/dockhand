@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { Layers, Loader2, Plus, Trash2, TriangleAlert } from 'lucide-svelte';
+	import { Check, ChevronsUpDown, Layers, Loader2, Plus, Trash2, TriangleAlert } from 'lucide-svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import * as Command from '$lib/components/ui/command';
+	import * as Popover from '$lib/components/ui/popover';
 	import * as Select from '$lib/components/ui/select';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -68,9 +70,9 @@
 	let networkAttachments = $state<SwarmServiceNetworkAttachment[]>([]);
 	let configReferences = $state<SwarmServiceResourceReference[]>([]);
 	let secretReferences = $state<SwarmServiceResourceReference[]>([]);
-	let networkSearch = $state('');
-	let configSearch = $state('');
-	let secretSearch = $state('');
+	let networkPickerOpen = $state(false);
+	let configPickerOpen = $state(false);
+	let secretPickerOpen = $state(false);
 	let constraints = $state('');
 	let limitCores = $state<number | undefined>(undefined);
 	let limitMemoryMb = $state<number | undefined>(undefined);
@@ -86,10 +88,10 @@
 		{ title: 'Update policy', policy: updatePolicy },
 		{ title: 'Rollback policy', policy: rollbackPolicy }
 	]);
-	const filteredNetworks = $derived(networks.filter((network) => (network.scope === 'swarm' || network.driver === 'overlay')
-		&& network.name.toLowerCase().includes(networkSearch.trim().toLowerCase())));
-	const filteredConfigs = $derived(configs.filter((config) => config.name.toLowerCase().includes(configSearch.trim().toLowerCase())));
-	const filteredSecrets = $derived(secrets.filter((secret) => secret.name.toLowerCase().includes(secretSearch.trim().toLowerCase())));
+	const availableNetworks = $derived(networks.filter((network) => (network.scope === 'swarm' || network.driver === 'overlay')
+		&& !networkAttachments.some((attachment) => attachment.target === network.id || attachment.target === network.name)));
+	const availableConfigs = $derived(configs.filter((config) => !configReferences.some((reference) => reference.id === config.id)));
+	const availableSecrets = $derived(secrets.filter((secret) => !secretReferences.some((reference) => reference.id === secret.id)));
 
 	function defaultPolicy(): SwarmServiceUpdatePolicy {
 		return { parallelism: 1, delaySeconds: 0, failureAction: 'pause', monitorSeconds: 5, maxFailureRatio: 0, order: 'stop-first' };
@@ -123,9 +125,9 @@
 		networkAttachments = [];
 		configReferences = [];
 		secretReferences = [];
-		networkSearch = '';
-		configSearch = '';
-		secretSearch = '';
+		networkPickerOpen = false;
+		configPickerOpen = false;
+		secretPickerOpen = false;
 		constraints = '';
 		limitCores = undefined;
 		limitMemoryMb = undefined;
@@ -185,9 +187,9 @@
 		networkAttachments = current.networks.map((network) => ({ ...network, aliases: [...network.aliases], driverOpts: { ...network.driverOpts } }));
 		configReferences = current.configs.map((reference) => ({ ...reference }));
 		secretReferences = current.secrets.map((reference) => ({ ...reference }));
-		networkSearch = '';
-		configSearch = '';
-		secretSearch = '';
+		networkPickerOpen = false;
+		configPickerOpen = false;
+		secretPickerOpen = false;
 		constraints = lines(current.constraints);
 		limitCores = current.resources.limits.cores;
 		limitMemoryMb = current.resources.limits.memoryMb;
@@ -236,10 +238,9 @@
 		return networkAttachments.find((item) => item.target === network.id || item.target === network.name);
 	}
 
-	function toggleNetwork(network: SwarmNetworkSummary, checked: boolean): void {
-		const existing = attachmentFor(network);
-		if (checked && !existing) networkAttachments = [...networkAttachments, { target: network.id, aliases: [], driverOpts: {} }];
-		if (!checked && existing) networkAttachments = networkAttachments.filter((item) => item !== existing);
+	function addNetwork(network: SwarmNetworkSummary): void {
+		if (!attachmentFor(network)) networkAttachments = [...networkAttachments, { target: network.id, aliases: [], driverOpts: {} }];
+		networkPickerOpen = false;
 	}
 
 	function networkName(target: string): string {
@@ -256,13 +257,15 @@
 		networkAttachments = networkAttachments.filter((attachment) => attachment.target !== target);
 	}
 
-	function toggleResource(kind: 'config' | 'secret', resource: SwarmConfigSummary | SwarmSecretSummary, checked: boolean): void {
+	function addResource(kind: 'config' | 'secret', resource: SwarmConfigSummary | SwarmSecretSummary): void {
 		const current = kind === 'config' ? configReferences : secretReferences;
-		const next = checked
-			? current.some((item) => item.id === resource.id) ? current : [...current, { id: resource.id, name: resource.name, target: resource.name }]
-			: current.filter((item) => item.id !== resource.id);
+		const next = current.some((item) => item.id === resource.id)
+			? current
+			: [...current, { id: resource.id, name: resource.name, target: resource.name }];
 		if (kind === 'config') configReferences = next;
 		else secretReferences = next;
+		if (kind === 'config') configPickerOpen = false;
+		else secretPickerOpen = false;
 	}
 
 	function resourceName(kind: 'config' | 'secret', id: string): string {
@@ -368,7 +371,17 @@
 					{#if mode === 'create'}<div class="space-y-2"><Label for="service-name">Service name</Label><Input id="service-name" bind:value={serviceName} disabled={pending} autocomplete="off" placeholder="my-service" /></div>{/if}
 					<div class="space-y-2"><Label for="service-image">Image</Label><Input id="service-image" bind:value={image} disabled={pending} /></div>
 					<div class="grid gap-4 sm:grid-cols-2">
-						<div><Label>Mode</Label><Select.Root type="single" bind:value={serviceMode} disabled={pending}><Select.Trigger class="w-full">{serviceMode === 'global' ? 'Global' : 'Replicated'}</Select.Trigger><Select.Content><Select.Item value="replicated">Replicated</Select.Item><Select.Item value="global">Global</Select.Item></Select.Content></Select.Root></div>
+						<div class="space-y-2">
+							<Label>Mode</Label>
+							{#if mode === 'create'}
+								<Select.Root type="single" bind:value={serviceMode} disabled={pending}><Select.Trigger class="w-full">{serviceMode === 'global' ? 'Global' : 'Replicated'}</Select.Trigger><Select.Content><Select.Item value="replicated">Replicated</Select.Item><Select.Item value="global">Global</Select.Item></Select.Content></Select.Root>
+							{:else}
+								<div class="rounded-md border bg-muted/30 px-3 py-2">
+									<p class="font-medium">{serviceMode === 'global' ? 'Global' : 'Replicated'} <span class="ml-1 text-xs font-normal text-muted-foreground">Read-only</span></p>
+									<p class="mt-1 text-xs text-muted-foreground">Docker Engine cannot change a service mode through ServiceUpdate. Recreate the service to use another mode.</p>
+								</div>
+							{/if}
+						</div>
 						{#if serviceMode === 'replicated'}<div><Label for="service-replicas">Desired replicas</Label><Input id="service-replicas" type="number" min="0" step="1" bind:value={replicas} disabled={pending} /></div>{/if}
 					</div>
 					<div class="space-y-2"><Label>Endpoint mode</Label><Select.Root type="single" bind:value={endpointMode}><Select.Trigger class="w-full">{endpointMode}</Select.Trigger><Select.Content><Select.Item value="vip">VIP</Select.Item><Select.Item value="dnsrr">DNS round-robin</Select.Item></Select.Content></Select.Root></div>
@@ -391,10 +404,20 @@
 							<Button size="icon" variant="ghost" onclick={() => removePort(index)} aria-label="Remove port"><Trash2 class="h-4 w-4" /></Button>
 						</div>{:else}<p class="text-sm text-muted-foreground">No ports published.</p>{/each}
 					</section>
-					<section class="space-y-3"><div><h3 class="font-medium">Overlay networks</h3><p class="text-xs text-muted-foreground">Search and select from the Swarm networks available on this manager.</p></div>
-						<Input aria-label="Search networks" placeholder="Search networks" bind:value={networkSearch} />
-						<div class="grid max-h-48 gap-2 overflow-auto sm:grid-cols-2">{#each filteredNetworks as network}<label class="flex items-start gap-3 rounded-md border p-3"><Checkbox checked={Boolean(attachmentFor(network))} onCheckedChange={(checked) => toggleNetwork(network, checked === true)} /><span><span class="font-medium">{network.name}</span><br /><span class="text-xs text-muted-foreground">{network.driver ?? 'unknown'}{network.attachable ? ' · attachable' : ''}</span></span></label>{:else}<p class="text-sm text-muted-foreground">No matching Swarm networks.</p>{/each}</div>
-						<div class="space-y-2"><h4 class="text-sm font-medium">Selected networks</h4>{#each networkAttachments as attachment}<div class="grid items-center gap-2 rounded-md border p-3 sm:grid-cols-[minmax(8rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{networkName(attachment.target)}</span><Input aria-label={`Aliases for ${networkName(attachment.target)}`} placeholder="Aliases, comma-separated" value={attachment.aliases.join(', ')} oninput={(event) => updateNetworkAliases(attachment.target, event.currentTarget.value)} /><Button size="icon" variant="ghost" onclick={() => removeNetwork(attachment.target)} aria-label={`Remove network ${networkName(attachment.target)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="text-sm text-muted-foreground">No networks selected.</p>{/each}</div>
+					<section class="space-y-3">
+						<div class="flex flex-wrap items-start justify-between gap-3"><div><h3 class="font-medium">Overlay networks</h3><p class="text-xs text-muted-foreground">Add a Swarm network, then configure aliases for that attachment.</p></div>
+							<Popover.Root bind:open={networkPickerOpen}>
+								<Popover.Trigger>
+									{#snippet child({ props })}<Button {...props} size="sm" variant="outline" role="combobox" aria-expanded={networkPickerOpen}><Plus class="h-4 w-4" /> Add network <ChevronsUpDown class="h-4 w-4 opacity-50" /></Button>{/snippet}
+								</Popover.Trigger>
+								<Popover.Content class="w-80 p-0" align="end">
+									<Command.Root><Command.Input placeholder="Search networks..." /><Command.List class="max-h-64"><Command.Empty>No available Swarm networks.</Command.Empty><Command.Group>
+										{#each availableNetworks as network (network.id)}<Command.Item value={`${network.name} ${network.driver ?? ''}`} onSelect={() => addNetwork(network)}><Check class="text-transparent" /><span class="font-medium">{network.name}</span><span class="ml-auto text-xs text-muted-foreground">{network.driver ?? 'unknown'}{network.attachable ? ' · attachable' : ''}</span></Command.Item>{/each}
+									</Command.Group></Command.List></Command.Root>
+								</Popover.Content>
+							</Popover.Root>
+						</div>
+						<div class="space-y-2"><h4 class="text-sm font-medium">Assigned networks ({networkAttachments.length})</h4>{#each networkAttachments as attachment (attachment.target)}<div class="grid items-center gap-2 rounded-md border p-3 sm:grid-cols-[minmax(8rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{networkName(attachment.target)}</span><Input aria-label={`Aliases for ${networkName(attachment.target)}`} placeholder="Aliases, comma-separated" value={attachment.aliases.join(', ')} oninput={(event) => updateNetworkAliases(attachment.target, event.currentTarget.value)} /><Button size="icon" variant="ghost" onclick={() => removeNetwork(attachment.target)} aria-label={`Remove network ${networkName(attachment.target)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No networks assigned.</p>{/each}</div>
 					</section>
 				</Tabs.Content>
 
@@ -405,8 +428,14 @@
 						</div>{:else}<p class="text-sm text-muted-foreground">No mounts configured.</p>{/each}
 					</section>
 					<section class="grid gap-6 lg:grid-cols-2">
-						<div class="space-y-3"><div><h3 class="font-medium">Configs</h3><p class="text-xs text-muted-foreground">Select Config metadata and set its container target.</p></div><Input aria-label="Search Configs" placeholder="Search Configs" bind:value={configSearch} /><div class="max-h-40 space-y-2 overflow-auto">{#each filteredConfigs as config}<label class="flex items-center gap-3 rounded-md border p-2"><Checkbox checked={configReferences.some((item) => item.id === config.id)} onCheckedChange={(checked) => toggleResource('config', config, checked === true)} /><span>{config.name}</span></label>{:else}<p class="text-sm text-muted-foreground">No matching Configs.</p>{/each}</div><div class="space-y-2">{#each configReferences as reference}<div class="grid items-center gap-2 rounded-md border p-2 sm:grid-cols-[minmax(7rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{resourceName('config', reference.id)}</span><Input aria-label={`Config target for ${resourceName('config', reference.id)}`} placeholder="Target path" bind:value={reference.target} /><Button size="icon" variant="ghost" onclick={() => removeResource('config', reference.id)} aria-label={`Remove Config ${resourceName('config', reference.id)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="text-sm text-muted-foreground">No Configs selected.</p>{/each}</div></div>
-						<div class="space-y-3"><div><h3 class="font-medium">Secrets</h3><p class="text-xs text-muted-foreground">Only Secret metadata is listed. Secret values are never read or displayed.</p></div><Input aria-label="Search Secrets" placeholder="Search Secrets" bind:value={secretSearch} /><div class="max-h-40 space-y-2 overflow-auto">{#each filteredSecrets as secret}<label class="flex items-center gap-3 rounded-md border p-2"><Checkbox checked={secretReferences.some((item) => item.id === secret.id)} onCheckedChange={(checked) => toggleResource('secret', secret, checked === true)} /><span>{secret.name}</span></label>{:else}<p class="text-sm text-muted-foreground">No matching Secrets.</p>{/each}</div><div class="space-y-2">{#each secretReferences as reference}<div class="grid items-center gap-2 rounded-md border p-2 sm:grid-cols-[minmax(7rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{resourceName('secret', reference.id)}</span><Input aria-label={`Secret target for ${resourceName('secret', reference.id)}`} placeholder="Target path" bind:value={reference.target} /><Button size="icon" variant="ghost" onclick={() => removeResource('secret', reference.id)} aria-label={`Remove Secret ${resourceName('secret', reference.id)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="text-sm text-muted-foreground">No Secrets selected.</p>{/each}</div></div>
+						<div class="space-y-3">
+							<div class="flex items-start justify-between gap-3"><div><h3 class="font-medium">Configs</h3><p class="text-xs text-muted-foreground">Add Config metadata and set its container target.</p></div><Popover.Root bind:open={configPickerOpen}><Popover.Trigger>{#snippet child({ props })}<Button {...props} size="sm" variant="outline" role="combobox" aria-expanded={configPickerOpen}><Plus class="h-4 w-4" /> Add Config <ChevronsUpDown class="h-4 w-4 opacity-50" /></Button>{/snippet}</Popover.Trigger><Popover.Content class="w-80 p-0" align="end"><Command.Root><Command.Input placeholder="Search Configs..." /><Command.List class="max-h-64"><Command.Empty>No available Configs.</Command.Empty><Command.Group>{#each availableConfigs as config (config.id)}<Command.Item value={config.name} onSelect={() => addResource('config', config)}><Check class="text-transparent" /><span class="font-medium">{config.name}</span></Command.Item>{/each}</Command.Group></Command.List></Command.Root></Popover.Content></Popover.Root></div>
+							<div class="space-y-2"><h4 class="text-sm font-medium">Assigned Configs ({configReferences.length})</h4>{#each configReferences as reference (reference.id)}<div class="grid items-center gap-2 rounded-md border p-2 sm:grid-cols-[minmax(7rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{resourceName('config', reference.id)}</span><Input aria-label={`Config target for ${resourceName('config', reference.id)}`} placeholder="Target path" bind:value={reference.target} /><Button size="icon" variant="ghost" onclick={() => removeResource('config', reference.id)} aria-label={`Remove Config ${resourceName('config', reference.id)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No Configs assigned.</p>{/each}</div>
+						</div>
+						<div class="space-y-3">
+							<div class="flex items-start justify-between gap-3"><div><h3 class="font-medium">Secrets</h3><p class="text-xs text-muted-foreground">Only metadata is listed; values are never read or displayed.</p></div><Popover.Root bind:open={secretPickerOpen}><Popover.Trigger>{#snippet child({ props })}<Button {...props} size="sm" variant="outline" role="combobox" aria-expanded={secretPickerOpen}><Plus class="h-4 w-4" /> Add Secret <ChevronsUpDown class="h-4 w-4 opacity-50" /></Button>{/snippet}</Popover.Trigger><Popover.Content class="w-80 p-0" align="end"><Command.Root><Command.Input placeholder="Search Secrets..." /><Command.List class="max-h-64"><Command.Empty>No available Secrets.</Command.Empty><Command.Group>{#each availableSecrets as secret (secret.id)}<Command.Item value={secret.name} onSelect={() => addResource('secret', secret)}><Check class="text-transparent" /><span class="font-medium">{secret.name}</span></Command.Item>{/each}</Command.Group></Command.List></Command.Root></Popover.Content></Popover.Root></div>
+							<div class="space-y-2"><h4 class="text-sm font-medium">Assigned Secrets ({secretReferences.length})</h4>{#each secretReferences as reference (reference.id)}<div class="grid items-center gap-2 rounded-md border p-2 sm:grid-cols-[minmax(7rem,1fr)_2fr_auto]"><span class="truncate text-sm font-medium">{resourceName('secret', reference.id)}</span><Input aria-label={`Secret target for ${resourceName('secret', reference.id)}`} placeholder="Target path" bind:value={reference.target} /><Button size="icon" variant="ghost" onclick={() => removeResource('secret', reference.id)} aria-label={`Remove Secret ${resourceName('secret', reference.id)}`}><Trash2 class="h-4 w-4" /></Button></div>{:else}<p class="rounded-md border border-dashed p-4 text-sm text-muted-foreground">No Secrets assigned.</p>{/each}</div>
+						</div>
 					</section>
 				</Tabs.Content>
 

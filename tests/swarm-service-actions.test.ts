@@ -156,6 +156,20 @@ describe('Swarm service actions', () => {
 		);
 	});
 
+	it('keeps the existing service mode immutable during ServiceUpdate', async () => {
+		const calls: Array<{ path: string; options?: RequestInit }> = [];
+		await assert.rejects(
+			performSwarmServiceAction(manager, 'global-service', { type: 'update', spec: editedSpec() }, async (path, options) => {
+				calls.push({ path, options });
+				return service({ Global: {} });
+			}),
+			(error: unknown) => error instanceof SwarmServiceActionError
+				&& error.statusCode === 400
+				&& /does not support changing service mode/.test(error.message)
+		);
+		assert.equal(calls.length, 1);
+	});
+
 	it('creates replicated and global standalone services from the editor spec', async () => {
 		for (const [name, replicas] of [['created-replicated', 2], ['created-global', null]] as const) {
 			const calls: Array<{ path: string; options?: RequestInit }> = [];
@@ -342,27 +356,4 @@ describe('Swarm service actions', () => {
 		assert.equal(requests, 1);
 	});
 
-	it('switches services between global and replicated modes with valid replica semantics', async () => {
-		let requests = 0;
-		let replicatedSpec: any;
-		const toReplicated = await performSwarmServiceAction(manager, 'global-service', { type: 'update', spec: editedSpec(2) }, async (_path, options) => {
-			requests++;
-			if (!options) return service({ Global: {} });
-			replicatedSpec = JSON.parse(String(options.body));
-			return {};
-		});
-		assert.equal(toReplicated.action, 'update');
-		assert.equal(requests, 2);
-		assert.equal(replicatedSpec.Mode.Replicated.Replicas, 2);
-		assert.equal('Global' in replicatedSpec.Mode, false);
-
-		let updatedSpec: any;
-		await performSwarmServiceAction(manager, 'replicated-service', { type: 'update', spec: editedSpec(null) }, async (_path, options) => {
-			if (!options) return service({ Replicated: { Replicas: 2 } });
-			updatedSpec = JSON.parse(String(options.body));
-			return {};
-		});
-		assert.deepEqual(updatedSpec.Mode, { Global: {} });
-		assert.equal('Replicated' in updatedSpec.Mode, false);
-	});
 });

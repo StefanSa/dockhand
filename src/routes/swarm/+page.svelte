@@ -208,6 +208,14 @@
 		return `${published}${port.targetPort ?? '—'}/${port.protocol ?? 'tcp'}${port.publishMode ? ` (${port.publishMode})` : ''}`;
 	}
 
+	function serviceNetworkName(target: string): string {
+		return data?.networks.find((network) => network.id === target || network.name === target)?.name ?? target;
+	}
+
+	function serviceTaskError(serviceId: string): string | undefined {
+		return data?.tasks.find((task) => task.serviceId === serviceId && task.error)?.error;
+	}
+
 	function detailHref(kind: SwarmDetailKind, id: string): string {
 		return swarmDetailHref(kind, id);
 	}
@@ -942,7 +950,7 @@
 										<p>{selectedService.runningTasks} running{#if selectedService.completedTasks > 0} · {selectedService.completedTasks} completed{/if}</p>
 									{/if}
 								</div>
-								<div><span class="text-muted-foreground">Health</span><p><Badge variant={swarmStatusPresentation(selectedService.healthState).variant} class="capitalize {swarmStatusPresentation(selectedService.healthState).className}">{selectedService.healthState}</Badge></p></div>
+								<div><span class="text-muted-foreground">Health</span><p><Badge variant={swarmStatusPresentation(selectedService.healthState).variant} class="capitalize {swarmStatusPresentation(selectedService.healthState).className}">{selectedService.healthState}</Badge></p>{#if serviceTaskError(selectedService.id)}<p class="mt-1 text-xs text-destructive">{serviceTaskError(selectedService.id)}</p>{/if}</div>
 								<div><span class="text-muted-foreground">Update state</span><p><Badge variant={swarmStatusPresentation(selectedService.updateStatus?.state ?? 'stable').variant} class="capitalize {swarmStatusPresentation(selectedService.updateStatus?.state ?? 'stable').className}">{selectedService.updateStatus?.state ?? 'stable'}</Badge></p>{#if selectedService.updateStatus?.message}<p class="mt-1 text-xs text-muted-foreground">{selectedService.updateStatus.message}</p>{/if}</div>
 								<div><span class="text-muted-foreground">Ports</span><p>{selectedService.ports.map(formatPort).join(', ') || 'None published'}</p></div>
 								<div><span class="text-muted-foreground">Placement</span><p>{selectedService.constraints.join(', ') || 'No constraints'}</p>{#if selectedService.preferences.length}<p class="text-xs text-muted-foreground">{selectedService.preferences.length} preference(s)</p>{/if}</div>
@@ -971,7 +979,8 @@
 									</Table.Root>
 								</div>
 							</div>
-							<div class="grid gap-4 lg:grid-cols-2">
+							<div class="grid gap-4 lg:grid-cols-3">
+								<div><h3 class="mb-2 text-sm font-medium">Networks ({selectedService.networks.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.networks as network (network.target)}<a href="/networks" title={network.aliases.length ? `Aliases: ${network.aliases.join(', ')}` : 'Open networks'}><Badge variant="outline">{serviceNetworkName(network.target)}{#if network.aliases.length} · {network.aliases.join(', ')}{/if}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
 								<div><h3 class="mb-2 text-sm font-medium">Configs ({selectedService.configs.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.configs as config (config.id)}<a href={detailHref('config', config.id)}><Badge variant="outline">{config.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
 								<div><h3 class="mb-2 text-sm font-medium">Secrets ({selectedService.secrets.length})</h3><div class="flex flex-wrap gap-1">{#each selectedService.secrets as secret (secret.id)}<a href={detailHref('secret', secret.id)}><Badge variant="outline">{secret.name}</Badge></a>{:else}<span class="text-sm text-muted-foreground">None</span>{/each}</div></div>
 							</div>
@@ -1087,7 +1096,7 @@
 										<span>{service.runningTasks} running</span>{#if service.completedTasks > 0}<div class="text-xs text-muted-foreground">{service.completedTasks} completed</div>{/if}
 									{/if}
 								</Table.Cell>
-								<Table.Cell><Badge variant={swarmStatusPresentation(service.healthState).variant} class="capitalize {swarmStatusPresentation(service.healthState).className}">{service.healthState}</Badge>{#if service.updateStatus?.state}<div class="mt-1"><Badge variant={swarmStatusPresentation(service.updateStatus.state).variant} class="capitalize {swarmStatusPresentation(service.updateStatus.state).className}">{service.updateStatus.state}</Badge></div>{/if}</Table.Cell>
+								<Table.Cell><Badge variant={swarmStatusPresentation(service.healthState).variant} class="capitalize {swarmStatusPresentation(service.healthState).className}">{service.healthState}</Badge>{#if service.updateStatus?.state}<div class="mt-1"><Badge variant={swarmStatusPresentation(service.updateStatus.state).variant} class="capitalize {swarmStatusPresentation(service.updateStatus.state).className}">{service.updateStatus.state}</Badge></div>{/if}{#if serviceTaskError(service.id)}<div class="mt-1 max-w-64 truncate text-xs text-destructive" title={serviceTaskError(service.id)}>{serviceTaskError(service.id)}</div>{/if}</Table.Cell>
 								<Table.Cell class="max-w-[22rem] text-xs">{service.constraints.join(', ') || 'No constraints'}{#if service.preferences.length}<div class="text-muted-foreground">{service.preferences.length} preference(s)</div>{/if}</Table.Cell>
 								{#if data.capability.controlAvailable && $canAccess('swarm', 'update')}
 									<Table.Cell>

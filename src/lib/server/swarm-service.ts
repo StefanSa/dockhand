@@ -323,6 +323,10 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 	if (!isRecord(mode.Replicated) && !isRecord(mode.Global)) {
 		throw new SwarmServiceActionError('Service editing is supported for replicated and global services only', 400);
 	}
+	const currentMode = isRecord(mode.Global) ? 'global' : 'replicated';
+	if (input.mode !== currentMode) {
+		throw new SwarmServiceActionError('Docker Engine does not support changing service mode through ServiceUpdate', 400);
+	}
 	if (input.mode === 'replicated' && input.replicas === null) {
 		throw new SwarmServiceActionError('Replicated services require a replica count', 400);
 	}
@@ -413,7 +417,7 @@ function prepareEditedServiceSpec(spec: Record<string, any>, input: SwarmService
 			Resources: nextResources,
 			RestartPolicy: restartPolicy
 		},
-		Mode: input.mode === 'replicated'
+		Mode: currentMode === 'replicated'
 			? { Replicated: { ...(isRecord(mode.Replicated) ? mode.Replicated : {}), Replicas: input.replicas } }
 			: { Global: { ...(isRecord(mode.Global) ? mode.Global : {}) } },
 		EndpointSpec: {
